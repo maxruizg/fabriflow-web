@@ -50,18 +50,24 @@ export async function apiRequest<T>(
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
+  // Create abort controller for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
   const config: RequestInit = {
     ...options,
     headers: {
       ...defaultHeaders,
       ...options.headers,
     },
+    signal: controller.signal,
   };
 
   try {
     console.log(`[API] Making API request to: ${url}`);
     console.log(`[API] Request config:`, { method: config.method, headers: config.headers });
     const response = await fetch(url, config);
+    clearTimeout(timeoutId);
 
     // Handle non-JSON responses
     const contentType = response.headers.get('content-type');
@@ -120,10 +126,20 @@ export async function apiRequest<T>(
     // Return text for non-JSON responses
     return (await response.text()) as unknown as T;
   } catch (error) {
+    clearTimeout(timeoutId);
     console.error('API request failed:', error);
 
     if (error instanceof ApiServerError) {
       throw error;
+    }
+
+    // Handle timeout/abort errors
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new ApiServerError(
+        'El servidor tardó demasiado en responder. Por favor intente más tarde.',
+        408,
+        'TIMEOUT_ERROR'
+      );
     }
 
     // Handle network errors

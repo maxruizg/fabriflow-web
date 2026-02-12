@@ -52,6 +52,7 @@ import {
   Lock,
   Users,
   Truck,
+  ServerCrash,
 } from "lucide-react";
 import {
   Select,
@@ -82,10 +83,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { fetchCompanies } = await import("~/lib/api.server");
   try {
     const companies = await fetchCompanies();
-    return json({ companies });
+    return json({ companies, serverError: null });
   } catch (error) {
     console.error("Failed to fetch companies:", error);
-    return json({ companies: [] });
+    const errorMessage = error instanceof Error
+      ? error.message
+      : "No se pudo conectar al servidor. Por favor intente más tarde.";
+    return json({ companies: [], serverError: errorMessage });
   }
 }
 
@@ -446,6 +450,15 @@ export default function Register() {
             </div>
           </CardHeader>
           <CardContent>
+            {loaderData?.serverError && (
+              <Alert variant="destructive" className="mb-4">
+                <ServerCrash className="h-4 w-4" />
+                <AlertDescription>
+                  {loaderData.serverError}
+                </AlertDescription>
+              </Alert>
+            )}
+
             {fetcher.data?.success ? (
               <div className="space-y-4">
                 <Alert className="border-green-200 bg-green-50 dark:bg-green-950 dark:border-green-800">
@@ -467,7 +480,10 @@ export default function Register() {
                 </div>
               </div>
             ) : (
-              <form onSubmit={handleSubmit(onSubmit, onError)} className="space-y-4">
+              <form
+                onSubmit={handleSubmit(onSubmit, onError)}
+                className="space-y-4"
+              >
                 <div className="flex items-center space-x-2 mb-4">
                   <StepIcon className="h-5 w-5 text-primary" />
                   <h3 className="text-lg font-medium">

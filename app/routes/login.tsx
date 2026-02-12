@@ -12,6 +12,7 @@ import {
   useNavigation,
 } from "@remix-run/react";
 import { useState } from "react";
+
 import { Button } from "~/components/ui/button";
 import {
   Card,
@@ -24,7 +25,7 @@ import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { ThemeToggle } from "../../components/ui/theme-toggle";
-import { Loader2, Eye, EyeOff, AlertTriangle, Factory } from "lucide-react";
+import { Loader2, Eye, EyeOff, AlertTriangle, Factory, ServerCrash } from "lucide-react";
 import { createUserSession } from "~/lib/session.server";
 import { login } from "~/lib/auth.server";
 import {
@@ -56,10 +57,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { fetchCompanies } = await import("~/lib/api.server");
   try {
     const companies = await fetchCompanies();
-    return json({ companies });
+    return json({ companies, serverError: null });
   } catch (error) {
     console.error("Failed to fetch companies:", error);
-    return json({ companies: [] });
+    const errorMessage = error instanceof Error
+      ? error.message
+      : "No se pudo conectar al servidor. Por favor intente más tarde.";
+    return json({ companies: [], serverError: errorMessage });
   }
 }
 
@@ -186,6 +190,15 @@ export default function Login() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {loaderData?.serverError && (
+              <Alert variant="destructive" className="mb-4">
+                <ServerCrash className="h-4 w-4" />
+                <AlertDescription>
+                  {loaderData.serverError}
+                </AlertDescription>
+              </Alert>
+            )}
+
             <Form method="post" className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="company">Empresa</Label>
