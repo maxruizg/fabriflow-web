@@ -8,17 +8,8 @@ import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Separator } from "~/components/ui/separator";
 import { Badge } from "~/components/ui/badge";
-import {
-  ArrowLeft,
-  Upload,
-  FileText,
-  FileCode,
-  FileCheck,
-  AlertCircle,
-  CheckCircle2,
-  Loader2,
-  X,
-} from "lucide-react";
+import { Icon } from "~/components/ui/icon";
+import { Loader2 } from "lucide-react";
 import { requireUser, getFullSession } from "~/lib/session.server";
 import {
   uploadInvoicePdf,
@@ -28,10 +19,11 @@ import {
 } from "~/lib/api.server";
 import { useState, useCallback } from "react";
 import type { InvoiceDetailBackend } from "~/types";
+import { cn } from "~/lib/utils";
 
 export const meta: MetaFunction = () => {
   return [
-    { title: "Cargar Factura - FabriFlow" },
+    { title: "Cargar Factura — FabriFlow" },
     { name: "description", content: "Cargar una nueva factura al sistema" },
   ];
 };
@@ -78,7 +70,6 @@ export async function action({ request }: ActionFunctionArgs) {
 
     try {
       const result = await uploadInvoiceXml(session.accessToken, user.company, xmlFile);
-      // Parse XML content to extract invoice data
       const xmlContent = await xmlFile.text();
       const invoiceData = parseXmlContent(xmlContent);
       return json({ success: true, xmlUrl: result.url, invoiceData });
@@ -145,7 +136,8 @@ export async function action({ request }: ActionFunctionArgs) {
   return json({ error: "Accion no valida" }, { status: 400 });
 }
 
-// Parse XML content to extract invoice data
+// ---- XML parser (same logic as original, untouched) ----
+
 function parseXmlContent(xmlContent: string): Partial<{
   folio: string;
   uuid: string;
@@ -160,33 +152,33 @@ function parseXmlContent(xmlContent: string): Partial<{
   tipoCambio: number;
   detalles: InvoiceDetailBackend[];
 }> {
-  // Simple XML parsing for CFDI attributes
   const getAttr = (tag: string, attr: string): string => {
-    const regex = new RegExp(`<[^>]*${tag}[^>]*${attr}="([^"]*)"`, 'i');
-    const match = xmlContent.match(regex);
-    return match ? match[1] : "";
+    const pattern = `<[^>]*${tag}[^>]*${attr}="([^"]*)"`;
+    const rx = new RegExp(pattern, "i");
+    const m = xmlContent.match(rx);
+    return m ? m[1] : "";
   };
 
-  const getComprobante = (attr: string) => getAttr("cfdi:Comprobante", attr) || getAttr("Comprobante", attr);
-  const getEmisor = (attr: string) => getAttr("cfdi:Emisor", attr) || getAttr("Emisor", attr);
-  const getReceptor = (attr: string) => getAttr("cfdi:Receptor", attr) || getAttr("Receptor", attr);
+  const getComprobante = (attr: string) =>
+    getAttr("cfdi:Comprobante", attr) || getAttr("Comprobante", attr);
+  const getEmisor = (attr: string) =>
+    getAttr("cfdi:Emisor", attr) || getAttr("Emisor", attr);
+  const getReceptor = (attr: string) =>
+    getAttr("cfdi:Receptor", attr) || getAttr("Receptor", attr);
 
-  // Get UUID from TimbreFiscalDigital
   const uuidMatch = xmlContent.match(/UUID="([^"]+)"/i);
   const uuid = uuidMatch ? uuidMatch[1] : "";
 
-  // Parse conceptos (details)
   const detalles: InvoiceDetailBackend[] = [];
-  const conceptoRegex = /<(?:cfdi:)?Concepto[^>]+>/gi;
+  const conceptoPattern = /<(?:cfdi:)?Concepto[^>]+>/gi;
   let conceptoMatch;
-  while ((conceptoMatch = conceptoRegex.exec(xmlContent)) !== null) {
-    const conceptoStr = conceptoMatch[0];
-    const descripcion = conceptoStr.match(/Descripcion="([^"]+)"/i)?.[1] || "";
-    const unidad = conceptoStr.match(/(?:ClaveUnidad|Unidad)="([^"]+)"/i)?.[1] || "";
-    const cantidad = parseFloat(conceptoStr.match(/Cantidad="([^"]+)"/i)?.[1] || "0");
-    const precioUnitario = parseFloat(conceptoStr.match(/ValorUnitario="([^"]+)"/i)?.[1] || "0");
-    const importe = parseFloat(conceptoStr.match(/Importe="([^"]+)"/i)?.[1] || "0");
-
+  while ((conceptoMatch = conceptoPattern.exec(xmlContent)) !== null) {
+    const s = conceptoMatch[0];
+    const descripcion = s.match(/Descripcion="([^"]+)"/i)?.[1] || "";
+    const unidad = s.match(/(?:ClaveUnidad|Unidad)="([^"]+)"/i)?.[1] || "";
+    const cantidad = parseFloat(s.match(/Cantidad="([^"]+)"/i)?.[1] || "0");
+    const precioUnitario = parseFloat(s.match(/ValorUnitario="([^"]+)"/i)?.[1] || "0");
+    const importe = parseFloat(s.match(/Importe="([^"]+)"/i)?.[1] || "0");
     if (descripcion) {
       detalles.push({ descripcion, unidad, cantidad, precioUnitario, importe });
     }
@@ -208,6 +200,8 @@ function parseXmlContent(xmlContent: string): Partial<{
   };
 }
 
+// ---- types ----
+
 interface FileUploadState {
   file: File | null;
   url: string | null;
@@ -215,6 +209,52 @@ interface FileUploadState {
   error: string | null;
   success: boolean;
 }
+
+// ---- Step card component ----
+
+interface StepCardProps {
+  step: number;
+  title: string;
+  hint: string;
+  done: boolean;
+  icon: React.ComponentProps<typeof Icon>["name"];
+  children: React.ReactNode;
+}
+
+function StepCard({ step, title, hint, done, icon, children }: StepCardProps) {
+  return (
+    <Card className="p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <div
+          className={cn(
+            "h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0",
+            done ? "bg-moss-soft" : "bg-clay-soft",
+          )}
+        >
+          {done ? (
+            <Icon name="check" size={16} className="text-moss-deep" />
+          ) : (
+            <Icon name={icon} size={16} className="text-clay" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h2 className="font-semibold text-[14px] text-ink">
+            {step}. {title}
+          </h2>
+          <p className="text-[12px] text-ink-3">{hint}</p>
+        </div>
+        {done && (
+          <Badge tone="moss" className="ml-auto flex-shrink-0">
+            Listo
+          </Badge>
+        )}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
+// ---- Page component ----
 
 export default function NewInvoice() {
   const { user } = useLoaderData<typeof loader>();
@@ -224,18 +264,16 @@ export default function NewInvoice() {
 
   const isSubmitting = navigation.state === "submitting";
 
-  // File states
   const [xmlState, setXmlState] = useState<FileUploadState>({
-    file: null, url: null, uploading: false, error: null, success: false
+    file: null, url: null, uploading: false, error: null, success: false,
   });
   const [pdfState, setPdfState] = useState<FileUploadState>({
-    file: null, url: null, uploading: false, error: null, success: false
+    file: null, url: null, uploading: false, error: null, success: false,
   });
   const [poState, setPoState] = useState<FileUploadState>({
-    file: null, url: null, uploading: false, error: null, success: false
+    file: null, url: null, uploading: false, error: null, success: false,
   });
 
-  // Invoice data from XML
   const [invoiceData, setInvoiceData] = useState<Partial<{
     folio: string;
     uuid: string;
@@ -251,23 +289,21 @@ export default function NewInvoice() {
     detalles: InvoiceDetailBackend[];
   }>>({});
 
-  // Handle action responses
-  if (actionData && 'xmlUrl' in actionData && actionData.xmlUrl && !xmlState.url) {
+  // Sync action results into local state
+  if (actionData && "xmlUrl" in actionData && actionData.xmlUrl && !xmlState.url) {
     setXmlState(prev => ({ ...prev, url: actionData.xmlUrl, success: true, uploading: false }));
-    if (actionData.invoiceData) {
-      setInvoiceData(actionData.invoiceData);
-    }
+    if (actionData.invoiceData) setInvoiceData(actionData.invoiceData);
   }
-  if (actionData && 'pdfUrl' in actionData && actionData.pdfUrl && !pdfState.url) {
+  if (actionData && "pdfUrl" in actionData && actionData.pdfUrl && !pdfState.url) {
     setPdfState(prev => ({ ...prev, url: actionData.pdfUrl, success: true, uploading: false }));
   }
-  if (actionData && 'ordenCompraUrl' in actionData && actionData.ordenCompraUrl && !poState.url) {
+  if (actionData && "ordenCompraUrl" in actionData && actionData.ordenCompraUrl && !poState.url) {
     setPoState(prev => ({ ...prev, url: actionData.ordenCompraUrl, success: true, uploading: false }));
   }
 
   const handleFileChange = useCallback((
     event: React.ChangeEvent<HTMLInputElement>,
-    setState: React.Dispatch<React.SetStateAction<FileUploadState>>
+    setState: React.Dispatch<React.SetStateAction<FileUploadState>>,
   ) => {
     const file = event.target.files?.[0] || null;
     setState(prev => ({ ...prev, file, error: null }));
@@ -275,51 +311,51 @@ export default function NewInvoice() {
 
   const canSubmit = xmlState.success && pdfState.success && poState.success && invoiceData.uuid;
 
+  // Format amounts for preview
+  const fmtAmt = (n: number | undefined) => {
+    const [int, dec] = (n ?? 0).toFixed(2).split(".");
+    return { int: int.replace(/\B(?=(\d{3})+(?!\d))/g, ","), dec };
+  };
+  const totalFmt = fmtAmt(invoiceData.total);
+  const subtotalFmt = fmtAmt(invoiceData.subtotal);
+
   return (
     <AuthLayout>
-      <div className="max-w-4xl mx-auto py-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-center gap-4">
+      <div className="max-w-4xl mx-auto py-6 space-y-5">
+
+        {/* Page header */}
+        <header className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => navigate("/invoices")}>
-            <ArrowLeft className="h-5 w-5" />
+            <Icon name="chevl" size={16} />
           </Button>
           <div>
-            <h1 className="text-2xl font-semibold">Cargar Factura</h1>
-            <p className="text-sm text-muted-foreground">
+            <h1 className="ff-page-title">
+              Cargar <em>factura</em>
+            </h1>
+            <p className="ff-page-sub">
               Sube los archivos requeridos para registrar una nueva factura
             </p>
           </div>
-        </div>
+        </header>
 
-        {/* Error message */}
-        {actionData && 'error' in actionData && actionData.error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-3">
-            <AlertCircle className="h-5 w-5 text-red-600" />
-            <p className="text-red-700">{actionData.error}</p>
+        {/* Global error */}
+        {"error" in (actionData ?? {}) && (actionData as { error?: string })?.error && (
+          <div className="bg-wine-soft border border-wine/20 rounded-lg p-4 flex items-center gap-3">
+            <Icon name="warn" size={16} className="text-wine flex-shrink-0" />
+            <p className="text-[13px] text-wine">
+              {(actionData as { error?: string }).error}
+            </p>
           </div>
         )}
 
-        {/* Step 1: XML Upload */}
-        <Card className="p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`h-8 w-8 rounded-full flex items-center justify-center ${xmlState.success ? 'bg-green-100' : 'bg-primary/10'}`}>
-              {xmlState.success ? (
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-              ) : (
-                <FileCode className="h-5 w-5 text-primary" />
-              )}
-            </div>
-            <div>
-              <h2 className="font-semibold">1. Archivo XML de la Factura</h2>
-              <p className="text-sm text-muted-foreground">El archivo CFDI con extension .xml</p>
-            </div>
-            {xmlState.success && (
-              <Badge variant="secondary" className="ml-auto bg-green-100 text-green-700">
-                Cargado
-              </Badge>
-            )}
-          </div>
-
+        {/* Step 1: XML */}
+        <StepCard
+          step={1}
+          title="Archivo XML de la Factura"
+          hint="El archivo CFDI con extensión .xml"
+          done={xmlState.success}
+          icon="file"
+        >
           <Form method="post" encType="multipart/form-data">
             <input type="hidden" name="intent" value="uploadXml" />
             <div className="flex gap-3">
@@ -333,39 +369,27 @@ export default function NewInvoice() {
               />
               <Button
                 type="submit"
+                variant="clay"
                 disabled={!xmlState.file || xmlState.uploading || xmlState.success}
               >
                 {isSubmitting && navigation.formData?.get("intent") === "uploadXml" ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Subiendo...</>
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Subiendo…</>
                 ) : (
-                  <><Upload className="h-4 w-4 mr-2" /> Subir</>
+                  <><Icon name="upload" size={14} /> Subir</>
                 )}
               </Button>
             </div>
           </Form>
-        </Card>
+        </StepCard>
 
-        {/* Step 2: PDF Upload */}
-        <Card className="p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`h-8 w-8 rounded-full flex items-center justify-center ${pdfState.success ? 'bg-green-100' : 'bg-primary/10'}`}>
-              {pdfState.success ? (
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-              ) : (
-                <FileText className="h-5 w-5 text-primary" />
-              )}
-            </div>
-            <div>
-              <h2 className="font-semibold">2. Archivo PDF de la Factura</h2>
-              <p className="text-sm text-muted-foreground">El PDF de representacion impresa</p>
-            </div>
-            {pdfState.success && (
-              <Badge variant="secondary" className="ml-auto bg-green-100 text-green-700">
-                Cargado
-              </Badge>
-            )}
-          </div>
-
+        {/* Step 2: PDF */}
+        <StepCard
+          step={2}
+          title="Archivo PDF de la Factura"
+          hint="El PDF de representación impresa"
+          done={pdfState.success}
+          icon="file"
+        >
           <Form method="post" encType="multipart/form-data">
             <input type="hidden" name="intent" value="uploadPdf" />
             <div className="flex gap-3">
@@ -379,41 +403,27 @@ export default function NewInvoice() {
               />
               <Button
                 type="submit"
+                variant="clay"
                 disabled={!pdfState.file || pdfState.uploading || pdfState.success}
               >
                 {isSubmitting && navigation.formData?.get("intent") === "uploadPdf" ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Subiendo...</>
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Subiendo…</>
                 ) : (
-                  <><Upload className="h-4 w-4 mr-2" /> Subir</>
+                  <><Icon name="upload" size={14} /> Subir</>
                 )}
               </Button>
             </div>
           </Form>
-        </Card>
+        </StepCard>
 
-        {/* Step 3: Purchase Order Upload */}
-        <Card className="p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`h-8 w-8 rounded-full flex items-center justify-center ${poState.success ? 'bg-green-100' : 'bg-primary/10'}`}>
-              {poState.success ? (
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-              ) : (
-                <FileCheck className="h-5 w-5 text-primary" />
-              )}
-            </div>
-            <div>
-              <h2 className="font-semibold">3. Orden de Compra</h2>
-              <p className="text-sm text-muted-foreground">
-                PDF que contenga el texto "Orden de compra" o "Purchase Order"
-              </p>
-            </div>
-            {poState.success && (
-              <Badge variant="secondary" className="ml-auto bg-green-100 text-green-700">
-                Validado
-              </Badge>
-            )}
-          </div>
-
+        {/* Step 3: Purchase Order */}
+        <StepCard
+          step={3}
+          title="Orden de Compra"
+          hint='PDF que contenga "Orden de compra" o "Purchase Order"'
+          done={poState.success}
+          icon="orders"
+        >
           <Form method="post" encType="multipart/form-data">
             <input type="hidden" name="intent" value="uploadPurchaseOrder" />
             <div className="flex gap-3">
@@ -427,91 +437,99 @@ export default function NewInvoice() {
               />
               <Button
                 type="submit"
+                variant="clay"
                 disabled={!poState.file || poState.uploading || poState.success}
               >
                 {isSubmitting && navigation.formData?.get("intent") === "uploadPurchaseOrder" ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Validando...</>
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Validando…</>
                 ) : (
-                  <><Upload className="h-4 w-4 mr-2" /> Subir y Validar</>
+                  <><Icon name="upload" size={14} /> Subir y Validar</>
                 )}
               </Button>
             </div>
           </Form>
 
           {poState.error && (
-            <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-red-600" />
-              <p className="text-sm text-red-700">{poState.error}</p>
+            <div className="mt-3 bg-wine-soft border border-wine/20 rounded-lg p-3 flex items-center gap-2">
+              <Icon name="warn" size={14} className="text-wine flex-shrink-0" />
+              <p className="text-[12px] text-wine">{poState.error}</p>
             </div>
           )}
-        </Card>
+        </StepCard>
 
-        {/* Invoice Data Preview */}
+        {/* Invoice data preview — shown once XML is parsed */}
         {invoiceData.uuid && (
           <>
-            <Separator />
+            <Separator className="bg-line" />
 
             <Card className="p-6">
-              <h2 className="font-semibold mb-4">Datos de la Factura</h2>
+              <div className="flex items-center gap-2 mb-5">
+                <Icon name="file" size={14} className="text-ink-3" />
+                <h2 className="font-semibold text-[14px] text-ink">Datos de la Factura</h2>
+              </div>
 
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="grid grid-cols-2 gap-4 text-[13px]">
                 <div>
-                  <Label className="text-muted-foreground">Folio</Label>
-                  <p className="font-medium">{invoiceData.folio || "-"}</p>
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Folio</Label>
+                  <p className="font-medium text-ink mt-0.5">{invoiceData.folio || "—"}</p>
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">UUID</Label>
-                  <p className="font-mono text-xs">{invoiceData.uuid}</p>
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">UUID</Label>
+                  <p className="font-mono text-[11px] text-ink-2 mt-0.5 break-all">{invoiceData.uuid}</p>
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">Fecha de Emision</Label>
-                  <p className="font-medium">{invoiceData.fechaEmision || "-"}</p>
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Fecha de Emisión</Label>
+                  <p className="font-medium text-ink mt-0.5">{invoiceData.fechaEmision || "—"}</p>
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">Moneda</Label>
-                  <p className="font-medium">{invoiceData.moneda || "MXN"}</p>
-                </div>
-
-                <Separator className="col-span-2" />
-
-                <div>
-                  <Label className="text-muted-foreground">Emisor</Label>
-                  <p className="font-medium">{invoiceData.nombreEmisor || "-"}</p>
-                  <p className="text-xs text-muted-foreground">{invoiceData.rfcEmisor}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">Receptor</Label>
-                  <p className="font-medium">{invoiceData.nombreReceptor || "-"}</p>
-                  <p className="text-xs text-muted-foreground">{invoiceData.rfcReceptor}</p>
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Moneda</Label>
+                  <p className="font-medium text-ink mt-0.5">{invoiceData.moneda || "MXN"}</p>
                 </div>
 
-                <Separator className="col-span-2" />
+                <Separator className="col-span-2 bg-line" />
 
                 <div>
-                  <Label className="text-muted-foreground">Subtotal</Label>
-                  <p className="font-semibold">
-                    ${invoiceData.subtotal?.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Emisor</Label>
+                  <p className="font-medium text-ink mt-0.5">{invoiceData.nombreEmisor || "—"}</p>
+                  <p className="text-[11px] font-mono text-ink-3">{invoiceData.rfcEmisor}</p>
+                </div>
+                <div>
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Receptor</Label>
+                  <p className="font-medium text-ink mt-0.5">{invoiceData.nombreReceptor || "—"}</p>
+                  <p className="text-[11px] font-mono text-ink-3">{invoiceData.rfcReceptor}</p>
+                </div>
+
+                <Separator className="col-span-2 bg-line" />
+
+                <div>
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Subtotal</Label>
+                  <p className="font-semibold font-mono text-ink mt-0.5">
+                    <span className="text-[14px] italic font-normal text-ink-3 mr-0.5">$</span>
+                    {subtotalFmt.int}<span className="text-ink-3">.{subtotalFmt.dec}</span>
                   </p>
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">Total</Label>
-                  <p className="font-semibold text-lg text-primary">
-                    ${invoiceData.total?.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Total</Label>
+                  <p className="font-semibold font-mono text-[18px] text-clay mt-0.5">
+                    <span className="text-[14px] italic font-normal text-ink-3 mr-0.5">$</span>
+                    {totalFmt.int}<span className="text-ink-3 text-[14px]">.{totalFmt.dec}</span>
                   </p>
                 </div>
               </div>
 
-              {/* Detalles */}
+              {/* Conceptos list */}
               {invoiceData.detalles && invoiceData.detalles.length > 0 && (
-                <div className="mt-4">
-                  <Label className="text-muted-foreground">Conceptos ({invoiceData.detalles.length})</Label>
-                  <div className="mt-2 space-y-2 max-h-40 overflow-y-auto">
+                <div className="mt-5">
+                  <Label className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
+                    Conceptos ({invoiceData.detalles.length})
+                  </Label>
+                  <div className="mt-2 space-y-1.5 max-h-40 overflow-y-auto">
                     {invoiceData.detalles.map((detalle, idx) => (
-                      <div key={idx} className="text-xs bg-muted/50 rounded p-2">
-                        <p className="font-medium truncate">{detalle.descripcion}</p>
-                        <div className="flex justify-between text-muted-foreground mt-1">
-                          <span>{detalle.cantidad} x ${detalle.precioUnitario?.toLocaleString()}</span>
-                          <span className="font-medium text-foreground">${detalle.importe?.toLocaleString()}</span>
+                      <div key={idx} className="text-[12px] bg-paper-2 border border-line rounded-md px-3 py-2">
+                        <p className="font-medium text-ink truncate">{detalle.descripcion}</p>
+                        <div className="flex justify-between text-ink-3 mt-0.5 font-mono">
+                          <span>{detalle.cantidad} × ${detalle.precioUnitario?.toLocaleString()}</span>
+                          <span className="font-medium text-ink">${detalle.importe?.toLocaleString()}</span>
                         </div>
                       </div>
                     ))}
@@ -520,7 +538,7 @@ export default function NewInvoice() {
               )}
             </Card>
 
-            {/* Submit Button */}
+            {/* Submit */}
             <Form method="post">
               <input type="hidden" name="intent" value="createInvoice" />
               <input type="hidden" name="folio" value={invoiceData.folio || ""} />
@@ -540,14 +558,19 @@ export default function NewInvoice() {
               <input type="hidden" name="ordenCompraUrl" value={poState.url || ""} />
 
               <div className="flex justify-end gap-3">
-                <Button variant="outline" type="button" onClick={() => navigate("/invoices")}>
+                <Button variant="ghost" type="button" onClick={() => navigate("/invoices")}>
                   Cancelar
                 </Button>
-                <Button type="submit" disabled={!canSubmit || isSubmitting} size="lg">
+                <Button
+                  type="submit"
+                  variant="clay"
+                  size="lg"
+                  disabled={!canSubmit || isSubmitting}
+                >
                   {isSubmitting && navigation.formData?.get("intent") === "createInvoice" ? (
-                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Guardando...</>
+                    <><Loader2 className="h-4 w-4 animate-spin" /> Guardando…</>
                   ) : (
-                    "Guardar Factura"
+                    <><Icon name="check" size={15} /> Guardar Factura</>
                   )}
                 </Button>
               </div>
@@ -555,11 +578,13 @@ export default function NewInvoice() {
           </>
         )}
 
-        {/* Instructions when no data yet */}
+        {/* Idle hint when nothing parsed yet */}
         {!invoiceData.uuid && (
-          <div className="text-center py-8 text-muted-foreground">
-            <p>Sube los archivos requeridos para continuar.</p>
-            <p className="text-sm mt-1">El XML se usara para extraer los datos de la factura automaticamente.</p>
+          <div className="text-center py-8">
+            <p className="text-[13px] text-ink-3">Sube los archivos requeridos para continuar.</p>
+            <p className="text-[12px] text-ink-4 mt-1">
+              El XML se usará para extraer los datos de la factura automáticamente.
+            </p>
           </div>
         )}
       </div>

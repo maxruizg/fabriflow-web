@@ -28,16 +28,18 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Separator } from "~/components/ui/separator";
-import { Search, Building2, RefreshCw, Filter, X, Mail, FileText, DollarSign } from "lucide-react";
+import { Icon } from "~/components/ui/icon";
+import { Building2, RefreshCw } from "lucide-react";
 import { requireUser, getFullSession } from "~/lib/session.server";
 import { fetchAllInvoices } from "~/lib/api.server";
 import type { InvoiceBackend } from "~/types";
 import { DataLoadError } from "~/components/ui/error-state";
+import { cn } from "~/lib/utils";
 import { useState, useCallback } from "react";
 
 export const meta: MetaFunction = () => {
   return [
-    { title: "Proveedores - FabriFlow" },
+    { title: "Proveedores — FabriFlow" },
     {
       name: "description",
       content: "Administra información y relaciones con proveedores",
@@ -132,6 +134,50 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 }
 
+// ---- helpers ----
+
+function fmtMXN(n: number) {
+  const [int, dec] = n.toFixed(2).split(".");
+  return { int: int.replace(/\B(?=(\d{3})+(?!\d))/g, ","), dec };
+}
+
+function fmtDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("es-MX", { day: "2-digit", month: "short" });
+  } catch { return "—"; }
+}
+
+function fmtDateLong(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" });
+  } catch { return "—"; }
+}
+
+// ---- status tile for detail dialog ----
+
+const STATUS_TILE_STYLES: Record<string, string> = {
+  pendiente: "bg-rust-soft text-rust-deep",
+  recibido: "bg-moss-soft text-moss-deep",
+  pagado: "bg-moss-soft text-moss-deep",
+  completado: "bg-paper-3 text-ink-2",
+  rechazado: "bg-wine-soft text-wine",
+};
+
+interface StatusTileProps {
+  count: number;
+  label: string;
+  tone: string;
+}
+
+function StatusTile({ count, label, tone }: StatusTileProps) {
+  return (
+    <div className={cn("text-center p-3 rounded-lg", tone)}>
+      <p className="text-lg font-semibold font-mono">{count}</p>
+      <p className="text-[11px] mt-0.5 opacity-80">{label}</p>
+    </div>
+  );
+}
+
 export default function Providers() {
   const { providers, error } = useLoaderData<typeof loader>();
   const revalidator = useRevalidator();
@@ -172,6 +218,9 @@ export default function Providers() {
   const totalUSD = filteredProviders.reduce((sum, p) => sum + p.totalUSD, 0);
   const totalFacturas = filteredProviders.reduce((sum, p) => sum + p.facturas, 0);
 
+  const mxn = fmtMXN(totalMXN);
+  const usd = fmtMXN(totalUSD);
+
   if (error) {
     return (
       <AuthLayout>
@@ -186,68 +235,73 @@ export default function Providers() {
   return (
     <AuthLayout>
       <div className="h-[calc(100vh-7rem)] flex flex-col gap-3">
-        {/* Header compacto con stats inline */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <h2 className="text-xl font-semibold">Proveedores</h2>
-            {/* Stats inline */}
-            <div className="hidden md:flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">Proveedores:</span>
-                <span className="font-semibold">{totalProveedores}</span>
-              </div>
-              <div className="h-4 w-px bg-border" />
-              <div className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">Facturas:</span>
-                <span className="font-semibold">{totalFacturas}</span>
-              </div>
-              <div className="h-4 w-px bg-border" />
-              <div className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">MXN:</span>
-                <span className="font-semibold text-primary">
-                  ${totalMXN.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+
+        {/* Page header */}
+        <header className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="ff-page-title">
+              Proveedores <em>activos</em>
+            </h1>
+            <p className="ff-page-sub">
+              Directorio agregado por facturación
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => revalidator.revalidate()}
+            disabled={revalidator.state === "loading"}
+            title="Actualizar"
+          >
+            <RefreshCw className={cn("h-4 w-4", revalidator.state === "loading" && "animate-spin")} />
+          </Button>
+        </header>
+
+        {/* Inline summary strip */}
+        <div className="hidden md:flex items-center gap-4 text-[12px] font-mono text-ink-3">
+          <span>
+            <span className="text-ink font-semibold">{totalProveedores}</span> proveedores
+          </span>
+          <span className="h-3 w-px bg-line-2" />
+          <span>
+            <span className="text-ink font-semibold">{totalFacturas}</span> facturas
+          </span>
+          <span className="h-3 w-px bg-line-2" />
+          <span>
+            MXN{" "}
+            <span className="text-ink font-semibold">
+              ${mxn.int}<span className="text-ink-3">.{mxn.dec}</span>
+            </span>
+          </span>
+          {totalUSD > 0 && (
+            <>
+              <span className="h-3 w-px bg-line-2" />
+              <span>
+                USD{" "}
+                <span className="text-moss-deep font-semibold">
+                  ${usd.int}<span className="text-ink-3">.{usd.dec}</span>
                 </span>
-              </div>
-              {totalUSD > 0 && (
-                <>
-                  <div className="h-4 w-px bg-border" />
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-muted-foreground">USD:</span>
-                    <span className="font-semibold text-green-600">
-                      ${totalUSD.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => revalidator.revalidate()}
-              disabled={revalidator.state === "loading"}
-              title="Actualizar"
-            >
-              <RefreshCw className={`h-4 w-4 ${revalidator.state === "loading" ? "animate-spin" : ""}`} />
-            </Button>
-          </div>
+              </span>
+            </>
+          )}
         </div>
 
         {/* Filtros compactos */}
         <div className="flex flex-wrap items-center gap-2 pb-1">
-          <div className="relative min-w-[200px] max-w-[300px] flex-1">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Buscar por nombre o RFC..."
-              className="pl-8 h-9"
+          <label className="inline-flex items-center gap-2 rounded-md border border-line-2 bg-paper px-3 py-1.5 min-w-[220px] focus-within:border-ink-3 transition-colors">
+            <Icon name="search" size={14} className="text-ink-3 flex-shrink-0" />
+            <input
+              type="search"
+              placeholder="Buscar por nombre o RFC…"
+              className="flex-1 bg-transparent border-0 outline-0 text-[13px] text-ink placeholder:text-ink-4"
               value={searchFilter}
               onChange={(e) => setSearchFilter(e.target.value)}
             />
-          </div>
+          </label>
 
           <Select value={estadoFilter} onValueChange={setEstadoFilter}>
             <SelectTrigger className="w-[160px] h-9">
+              <Icon name="filter" size={12} className="text-ink-3 mr-1" />
               <SelectValue placeholder="Estado" />
             </SelectTrigger>
             <SelectContent>
@@ -259,7 +313,7 @@ export default function Providers() {
 
           {hasActiveFilters && (
             <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 px-2">
-              <X className="h-4 w-4" />
+              <Icon name="x" size={14} />
             </Button>
           )}
         </div>
@@ -270,75 +324,79 @@ export default function Providers() {
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent border-b">
-                  <TableHead className="h-10 text-xs font-semibold">Proveedor</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold w-[130px]">RFC</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold text-center w-[80px]">Facturas</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold text-right w-[130px]">Total MXN</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold text-right w-[120px]">Total USD</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold text-center w-[100px]">Pendientes</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold w-[100px]">Última</TableHead>
+                  <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3">Proveedor</TableHead>
+                  <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 w-[130px]">RFC</TableHead>
+                  <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 text-center w-[80px]">Facturas</TableHead>
+                  <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 text-right w-[140px]">Total MXN</TableHead>
+                  <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 text-right w-[130px]">Total USD</TableHead>
+                  <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 text-center w-[100px]">Pendientes</TableHead>
+                  <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 w-[90px]">Última</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredProviders.map((provider) => (
-                  <TableRow
-                    key={provider.rfc}
-                    className="group cursor-pointer hover:bg-muted/50"
-                    onDoubleClick={() => {
-                      setSelectedProvider(provider);
-                      setIsDetailOpen(true);
-                    }}
-                  >
-                    <TableCell className="py-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                          <Building2 className="h-3.5 w-3.5 text-primary" />
+                {filteredProviders.map((provider) => {
+                  const pmxn = fmtMXN(provider.totalMXN);
+                  const pusd = fmtMXN(provider.totalUSD);
+                  return (
+                    <TableRow
+                      key={provider.rfc}
+                      className="group cursor-pointer hover:bg-paper-2"
+                      onDoubleClick={() => {
+                        setSelectedProvider(provider);
+                        setIsDetailOpen(true);
+                      }}
+                    >
+                      <TableCell className="py-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-7 w-7 rounded-full bg-clay-soft flex items-center justify-center flex-shrink-0">
+                            <Icon name="vendors" size={14} className="text-clay" />
+                          </div>
+                          <span className="font-medium text-[13px] text-ink truncate max-w-[250px]">
+                            {provider.nombre}
+                          </span>
                         </div>
-                        <span className="font-medium text-sm truncate max-w-[250px]">
-                          {provider.nombre}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="py-2.5">
-                      <span className="font-mono text-xs text-muted-foreground">{provider.rfc}</span>
-                    </TableCell>
-                    <TableCell className="py-2.5 text-center">
-                      <span className="text-sm font-medium">{provider.facturas}</span>
-                    </TableCell>
-                    <TableCell className="py-2.5 text-right">
-                      <span className="font-semibold text-sm tabular-nums">
-                        ${provider.totalMXN.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                      </span>
-                    </TableCell>
-                    <TableCell className="py-2.5 text-right text-sm tabular-nums text-muted-foreground">
-                      {provider.totalUSD > 0
-                        ? `$${provider.totalUSD.toLocaleString("en-US", { minimumFractionDigits: 2 })}`
-                        : "-"
-                      }
-                    </TableCell>
-                    <TableCell className="py-2.5 text-center">
-                      {provider.estados.pendiente > 0 ? (
-                        <Badge variant="secondary" className="text-xs px-1.5 py-0">
-                          {provider.estados.pendiente}
-                        </Badge>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="py-2.5 text-sm tabular-nums text-muted-foreground">
-                      {new Date(provider.ultimaFactura).toLocaleDateString("es-MX", {
-                        day: "2-digit",
-                        month: "short"
-                      })}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                      <TableCell className="py-2.5">
+                        <span className="font-mono text-[11px] text-ink-3">{provider.rfc}</span>
+                      </TableCell>
+                      <TableCell className="py-2.5 text-center">
+                        <span className="text-[13px] font-medium text-ink">{provider.facturas}</span>
+                      </TableCell>
+                      <TableCell className="py-2.5 text-right font-mono text-[13px]">
+                        <span className="text-ink">${pmxn.int}</span>
+                        <span className="text-ink-3">.{pmxn.dec}</span>
+                      </TableCell>
+                      <TableCell className="py-2.5 text-right font-mono text-[13px] text-ink-3">
+                        {provider.totalUSD > 0 ? (
+                          <>
+                            <span className="text-ink">${pusd.int}</span>
+                            <span className="text-ink-3">.{pusd.dec}</span>
+                          </>
+                        ) : (
+                          <span className="text-ink-4">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2.5 text-center">
+                        {provider.estados.pendiente > 0 ? (
+                          <Badge tone="rust">
+                            {provider.estados.pendiente}
+                          </Badge>
+                        ) : (
+                          <span className="text-[12px] text-ink-4">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2.5 text-[12px] font-mono text-ink-3">
+                        {fmtDate(provider.ultimaFactura)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
                 {filteredProviders.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                      <Building2 className="h-10 w-10 mx-auto mb-3 opacity-40" />
-                      <p className="font-medium">No se encontraron proveedores</p>
-                      <p className="text-sm mt-1">
+                    <TableCell colSpan={7} className="text-center py-16 text-ink-3">
+                      <Building2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                      <p className="font-medium text-ink-2">No se encontraron proveedores</p>
+                      <p className="text-[12px] mt-1">
                         {providers.length === 0
                           ? "Aún no hay facturas registradas"
                           : "Intenta ajustar los filtros de búsqueda"
@@ -358,12 +416,12 @@ export default function Providers() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                <Building2 className="h-5 w-5 text-primary" />
+              <div className="h-10 w-10 rounded-lg bg-clay-soft flex items-center justify-center flex-shrink-0">
+                <Icon name="vendors" size={18} className="text-clay" />
               </div>
               <div>
-                <span className="text-lg">{selectedProvider?.nombre}</span>
-                <p className="text-sm font-normal text-muted-foreground mt-0.5 font-mono">
+                <span className="text-[17px] font-semibold text-ink">{selectedProvider?.nombre}</span>
+                <p className="text-[12px] font-mono text-ink-3 mt-0.5">
                   {selectedProvider?.rfc}
                 </p>
               </div>
@@ -371,72 +429,67 @@ export default function Providers() {
           </DialogHeader>
 
           {selectedProvider && (
-            <div className="space-y-6 mt-4">
+            <div className="space-y-5 mt-4">
               {/* Resumen de montos */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-muted/50 rounded-lg p-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-paper-2 rounded-lg p-4 border border-line">
                   <div className="flex items-center gap-2 mb-2">
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Total MXN</span>
+                    <Icon name="coin" size={14} className="text-ink-3" />
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Total MXN</span>
                   </div>
-                  <p className="text-2xl font-bold">
-                    ${selectedProvider.totalMXN.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                  </p>
+                  {(() => {
+                    const m = fmtMXN(selectedProvider.totalMXN);
+                    return (
+                      <p className="text-2xl font-semibold font-mono text-ink">
+                        <span className="text-[18px] italic font-normal text-ink-3 mr-1">$</span>
+                        {m.int}<span className="text-ink-3">.{m.dec}</span>
+                      </p>
+                    );
+                  })()}
                 </div>
-                <div className="bg-muted/50 rounded-lg p-4">
+                <div className="bg-paper-2 rounded-lg p-4 border border-line">
                   <div className="flex items-center gap-2 mb-2">
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Total USD</span>
+                    <Icon name="coin" size={14} className="text-ink-3" />
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Total USD</span>
                   </div>
-                  <p className="text-2xl font-bold">
-                    ${selectedProvider.totalUSD.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                  </p>
+                  {(() => {
+                    const m = fmtMXN(selectedProvider.totalUSD);
+                    return (
+                      <p className="text-2xl font-semibold font-mono text-ink">
+                        <span className="text-[18px] italic font-normal text-ink-3 mr-1">US$</span>
+                        {m.int}<span className="text-ink-3">.{m.dec}</span>
+                      </p>
+                    );
+                  })()}
                 </div>
               </div>
 
-              <Separator />
+              <Separator className="bg-line" />
 
               {/* Estadísticas de facturas */}
               <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <FileText className="h-4 w-4 text-muted-foreground" />
-                  <span className="font-semibold text-sm">Facturas ({selectedProvider.facturas})</span>
+                  <Icon name="file" size={14} className="text-ink-3" />
+                  <span className="font-semibold text-[13px] text-ink">
+                    Facturas <span className="text-ink-3 font-normal">({selectedProvider.facturas})</span>
+                  </span>
                 </div>
                 <div className="grid grid-cols-5 gap-2">
-                  <div className="text-center p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20">
-                    <p className="text-lg font-bold text-yellow-600">{selectedProvider.estados.pendiente}</p>
-                    <p className="text-xs text-muted-foreground">Pendiente</p>
-                  </div>
-                  <div className="text-center p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20">
-                    <p className="text-lg font-bold text-blue-600">{selectedProvider.estados.recibido}</p>
-                    <p className="text-xs text-muted-foreground">Recibido</p>
-                  </div>
-                  <div className="text-center p-3 rounded-lg bg-green-50 dark:bg-green-900/20">
-                    <p className="text-lg font-bold text-green-600">{selectedProvider.estados.pagado}</p>
-                    <p className="text-xs text-muted-foreground">Pagado</p>
-                  </div>
-                  <div className="text-center p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20">
-                    <p className="text-lg font-bold text-purple-600">{selectedProvider.estados.completado}</p>
-                    <p className="text-xs text-muted-foreground">Completado</p>
-                  </div>
-                  <div className="text-center p-3 rounded-lg bg-red-50 dark:bg-red-900/20">
-                    <p className="text-lg font-bold text-red-600">{selectedProvider.estados.rechazado}</p>
-                    <p className="text-xs text-muted-foreground">Rechazado</p>
-                  </div>
+                  <StatusTile count={selectedProvider.estados.pendiente} label="Pendiente" tone={STATUS_TILE_STYLES.pendiente} />
+                  <StatusTile count={selectedProvider.estados.recibido} label="Recibido" tone={STATUS_TILE_STYLES.recibido} />
+                  <StatusTile count={selectedProvider.estados.pagado} label="Pagado" tone={STATUS_TILE_STYLES.pagado} />
+                  <StatusTile count={selectedProvider.estados.completado} label="Completado" tone={STATUS_TILE_STYLES.completado} />
+                  <StatusTile count={selectedProvider.estados.rechazado} label="Rechazado" tone={STATUS_TILE_STYLES.rechazado} />
                 </div>
               </div>
 
-              <Separator />
+              <Separator className="bg-line" />
 
               {/* Última actividad */}
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Última factura</span>
-                <span className="font-medium">
-                  {new Date(selectedProvider.ultimaFactura).toLocaleDateString("es-MX", {
-                    day: "numeric",
-                    month: "long",
-                    year: "numeric"
-                  })}
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="text-ink-3 font-mono uppercase tracking-wider text-[11px]">Última factura</span>
+                <span className="font-medium text-ink">
+                  {fmtDateLong(selectedProvider.ultimaFactura)}
                 </span>
               </div>
             </div>

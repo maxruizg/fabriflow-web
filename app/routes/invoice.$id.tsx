@@ -5,6 +5,7 @@ import { AuthLayout } from "~/components/layout/auth-layout";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
+import { Icon } from "~/components/ui/icon";
 import {
   Table,
   TableBody,
@@ -13,14 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "~/components/ui/table";
-import {
-  ArrowLeft,
-  Eye,
-  Download,
-  FileText,
-  Trash2,
-  RefreshCw,
-} from "lucide-react";
+import { RefreshCw, Trash2 } from "lucide-react";
 import type { InvoiceBackend, InvoiceStatus } from "~/types";
 import { useState } from "react";
 import {
@@ -40,10 +34,11 @@ import {
 } from "~/components/ui/select";
 import { requireUser, getFullSession } from "~/lib/session.server";
 import { fetchInvoice, updateInvoiceStatus, deleteInvoice, fetchInvoiceUrls } from "~/lib/api.server";
+import { statusTone, statusLabel, cn } from "~/lib/utils";
 
 export const meta: MetaFunction = () => {
   return [
-    { title: "Detalles de Factura - FabriFlow" },
+    { title: "Detalles de Factura — FabriFlow" },
     {
       name: "description",
       content: "Detalles completos de la factura y documentos relacionados",
@@ -136,30 +131,28 @@ export async function action({ request, params }: ActionFunctionArgs) {
   return json({ success: false, error: "Acción no válida" }, { status: 400 });
 }
 
-function getStatusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
-  switch (status.toLowerCase()) {
-    case "pagado":
-    case "completado":
-      return "default";
-    case "pendiente":
-    case "recibido":
-      return "secondary";
-    case "rechazado":
-      return "destructive";
-    default:
-      return "outline";
-  }
+// ---- helpers ----
+
+function fmtMoney(n: number) {
+  const [int, dec] = n.toFixed(2).split(".");
+  return { int: int.replace(/\B(?=(\d{3})+(?!\d))/g, ","), dec };
 }
 
-function getStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    pendiente: "Pendiente",
-    recibido: "Recibido",
-    pagado: "Pagado",
-    completado: "Completado",
-    rechazado: "Rechazado",
-  };
-  return labels[status.toLowerCase()] || status;
+function fmtDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("es-MX");
+  } catch { return "—"; }
+}
+
+// ---- Meta row helper ----
+
+function MetaItem({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <span className="text-[11px] font-mono uppercase tracking-wider text-ink-3">{label}</span>
+      <div className="font-medium text-[13px] text-ink mt-0.5">{children}</div>
+    </div>
+  );
 }
 
 export default function InvoiceDetails() {
@@ -169,6 +162,11 @@ export default function InvoiceDetails() {
   const revalidator = useRevalidator();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+
+  const tone = statusTone(invoice.estado);
+  const label = statusLabel(invoice.estado);
+  const total = fmtMoney(invoice.total);
+  const subtotal = fmtMoney(invoice.subtotal);
 
   const handleStatusChange = (newStatus: string) => {
     const formData = new FormData();
@@ -189,34 +187,33 @@ export default function InvoiceDetails() {
   return (
     <AuthLayout>
       <div className="h-[calc(100vh-8rem)] flex flex-col">
-        {/* Header */}
-        <div className="border-b bg-background">
-          <div className="px-6 py-4 flex items-center justify-between">
-            <div className="flex items-center space-x-4">
+
+        {/* Page header */}
+        <div className="border-b border-line bg-paper">
+          <div className="px-6 py-4 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
               <Button
                 variant="ghost"
+                size="icon"
                 onClick={() => navigate("/invoices")}
-                className="h-9 w-9 p-0"
+                title="Volver a facturas"
               >
-                <ArrowLeft className="h-4 w-4" />
+                <Icon name="chevl" size={16} />
               </Button>
-              <div>
-                <h1 className="text-xl font-bold">{invoice.folio}</h1>
-                <p className="text-sm text-muted-foreground truncate max-w-[500px]">
+              <div className="min-w-0">
+                <h1 className="ff-page-title !text-[20px]">
+                  {invoice.folio}
+                </h1>
+                <p className="ff-page-sub truncate max-w-[500px]">
                   {invoice.nombreEmisor}
                 </p>
               </div>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-2 flex-shrink-0">
               {isAdmin ? (
-                <Select
-                  value={invoice.estado}
-                  onValueChange={handleStatusChange}
-                >
-                  <SelectTrigger className="w-[150px]">
-                    <Badge variant={getStatusBadgeVariant(invoice.estado)}>
-                      {getStatusLabel(invoice.estado)}
-                    </Badge>
+                <Select value={invoice.estado} onValueChange={handleStatusChange}>
+                  <SelectTrigger className="w-[160px]">
+                    <Badge tone={tone}>{label}</Badge>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pendiente">Pendiente</SelectItem>
@@ -227,88 +224,79 @@ export default function InvoiceDetails() {
                   </SelectContent>
                 </Select>
               ) : (
-                <Badge variant={getStatusBadgeVariant(invoice.estado)}>
-                  {getStatusLabel(invoice.estado)}
-                </Badge>
+                <Badge tone={tone}>{label}</Badge>
               )}
               <Button
                 variant="outline"
-                size="sm"
+                size="icon"
                 onClick={() => revalidator.revalidate()}
                 disabled={revalidator.state === "loading"}
+                title="Actualizar"
               >
-                <RefreshCw className={`h-4 w-4 ${revalidator.state === "loading" ? "animate-spin" : ""}`} />
+                <RefreshCw className={cn("h-4 w-4", revalidator.state === "loading" && "animate-spin")} />
               </Button>
             </div>
           </div>
         </div>
 
-        {/* Invoice Summary */}
-        <div className="bg-muted/30 border-b">
-          <div className="px-6 py-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
-              <div>
-                <span className="text-muted-foreground text-sm">Total</span>
-                <div className="font-semibold">
-                  ${invoice.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })} {invoice.moneda}
-                </div>
-              </div>
-              <div>
-                <span className="text-muted-foreground text-sm">Subtotal</span>
-                <div className="font-medium">
-                  ${invoice.subtotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                </div>
-              </div>
-              <div>
-                <span className="text-muted-foreground text-sm">Fecha Emisión</span>
-                <div className="font-medium">
-                  {new Date(invoice.fechaEmision).toLocaleDateString("es-MX")}
-                </div>
-              </div>
-              <div>
-                <span className="text-muted-foreground text-sm">Fecha Entrada</span>
-                <div className="font-medium">
-                  {new Date(invoice.fechaEntrada).toLocaleDateString("es-MX")}
-                </div>
-              </div>
-              <div>
-                <span className="text-muted-foreground text-sm">RFC Emisor</span>
-                <div className="font-medium">{invoice.rfcEmisor}</div>
-              </div>
-              <div>
-                <span className="text-muted-foreground text-sm">RFC Receptor</span>
-                <div className="font-medium">{invoice.rfcReceptor}</div>
-              </div>
+        {/* Summary strip */}
+        <div className="bg-paper-2 border-b border-line">
+          <div className="px-6 py-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              <MetaItem label="Total">
+                <span className="font-mono">
+                  <span className="text-[15px] italic font-normal text-ink-3 mr-0.5">$</span>
+                  {total.int}
+                  <span className="text-ink-3">.{total.dec}</span>
+                  <span className="ml-1 text-[11px] text-ink-3">{invoice.moneda}</span>
+                </span>
+              </MetaItem>
+              <MetaItem label="Subtotal">
+                <span className="font-mono">
+                  ${subtotal.int}<span className="text-ink-3">.{subtotal.dec}</span>
+                </span>
+              </MetaItem>
+              <MetaItem label="Fecha Emisión">
+                {fmtDate(invoice.fechaEmision)}
+              </MetaItem>
+              <MetaItem label="Fecha Entrada">
+                {fmtDate(invoice.fechaEntrada)}
+              </MetaItem>
+              <MetaItem label="RFC Emisor">
+                <span className="font-mono text-[12px]">{invoice.rfcEmisor}</span>
+              </MetaItem>
+              <MetaItem label="RFC Receptor">
+                <span className="font-mono text-[12px]">{invoice.rfcReceptor}</span>
+              </MetaItem>
             </div>
           </div>
         </div>
 
-        {/* UUID Section */}
-        <div className="px-6 py-3 bg-muted/10 border-b">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-muted-foreground text-sm">UUID:</span>
-              <span className="ml-2 font-mono text-sm">{invoice.uuid}</span>
-            </div>
-            {invoice.tipoCambio && invoice.tipoCambio !== 1 && (
-              <div>
-                <span className="text-muted-foreground text-sm">Tipo de Cambio:</span>
-                <span className="ml-2 font-medium">{invoice.tipoCambio}</span>
-              </div>
-            )}
+        {/* UUID row */}
+        <div className="px-6 py-2.5 bg-paper border-b border-line flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-ink-3 flex-shrink-0">UUID</span>
+            <span className="font-mono text-[12px] text-ink-2 truncate">{invoice.uuid}</span>
           </div>
+          {invoice.tipoCambio && invoice.tipoCambio !== 1 && (
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <span className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Tipo de Cambio</span>
+              <span className="font-mono text-[13px] text-ink">{invoice.tipoCambio}</span>
+            </div>
+          )}
         </div>
 
-        {/* Main Content Area */}
+        {/* Main content */}
         <div className="flex-1 min-h-0 overflow-auto">
           <div className="px-6 py-6">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Detalles/Conceptos Section */}
-              <div className="lg:col-span-2">
+
+              {/* Left: Concepts + Parties */}
+              <div className="lg:col-span-2 space-y-4">
                 <Card>
                   <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center">
-                      <FileText className="mr-2 h-4 w-4" />
+                    <CardTitle className="flex items-center gap-2 text-[14px]">
+                      <Icon name="file" size={14} className="text-ink-3" />
                       Conceptos de la Factura
                     </CardTitle>
                   </CardHeader>
@@ -325,67 +313,71 @@ export default function InvoiceDetails() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {invoice.detalles.map((detalle, index) => (
-                            <TableRow key={index}>
-                              <TableCell>{detalle.descripcion}</TableCell>
-                              <TableCell>{detalle.unidad}</TableCell>
-                              <TableCell className="text-right">{detalle.cantidad}</TableCell>
-                              <TableCell className="text-right">
-                                ${detalle.precioUnitario.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                ${detalle.importe.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                          {invoice.detalles.map((detalle, index) => {
+                            const pu = fmtMoney(detalle.precioUnitario);
+                            const im = fmtMoney(detalle.importe);
+                            return (
+                              <TableRow key={index}>
+                                <TableCell className="text-[13px]">{detalle.descripcion}</TableCell>
+                                <TableCell className="text-[13px] text-ink-3">{detalle.unidad}</TableCell>
+                                <TableCell className="text-right font-mono text-[13px]">{detalle.cantidad}</TableCell>
+                                <TableCell className="text-right font-mono text-[13px]">
+                                  ${pu.int}<span className="text-ink-3">.{pu.dec}</span>
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-[13px] font-medium">
+                                  ${im.int}<span className="text-ink-3">.{im.dec}</span>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     ) : (
-                      <div className="flex items-center justify-center h-32 text-muted-foreground">
+                      <div className="flex items-center justify-center h-32 text-ink-3">
                         <div className="text-center">
-                          <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                          <p>No hay conceptos disponibles</p>
+                          <Icon name="file" size={28} className="mx-auto mb-2 opacity-30" />
+                          <p className="text-[13px]">No hay conceptos disponibles</p>
                         </div>
                       </div>
                     )}
                   </CardContent>
                 </Card>
 
-                {/* Emisor/Receptor Info */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                {/* Emisor / Receptor */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <Card>
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-base">Emisor</CardTitle>
+                      <CardTitle className="text-[13px] text-ink-3 font-normal uppercase tracking-wider font-mono">Emisor</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <p className="font-medium">{invoice.nombreEmisor}</p>
-                      <p className="text-sm text-muted-foreground">{invoice.rfcEmisor}</p>
+                      <p className="font-medium text-[14px] text-ink">{invoice.nombreEmisor}</p>
+                      <p className="text-[12px] font-mono text-ink-3 mt-0.5">{invoice.rfcEmisor}</p>
                     </CardContent>
                   </Card>
                   <Card>
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-base">Receptor</CardTitle>
+                      <CardTitle className="text-[13px] text-ink-3 font-normal uppercase tracking-wider font-mono">Receptor</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <p className="font-medium">{invoice.nombreReceptor}</p>
-                      <p className="text-sm text-muted-foreground">{invoice.rfcReceptor}</p>
+                      <p className="font-medium text-[14px] text-ink">{invoice.nombreReceptor}</p>
+                      <p className="text-[12px] font-mono text-ink-3 mt-0.5">{invoice.rfcReceptor}</p>
                     </CardContent>
                   </Card>
                 </div>
               </div>
 
-              {/* Actions Section */}
+              {/* Right: Actions */}
               <div>
                 <Card>
                   <CardHeader className="pb-3">
-                    <CardTitle>Acciones</CardTitle>
+                    <CardTitle className="text-[14px]">Acciones</CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    {/* Download Actions */}
+                  <CardContent className="space-y-5">
+                    {/* Downloads */}
                     <div>
-                      <h4 className="font-medium mb-3 text-muted-foreground">
+                      <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-2">
                         Descargas
-                      </h4>
+                      </p>
                       <div className="space-y-2">
                         {invoice.pdfUrl && (
                           <>
@@ -394,16 +386,16 @@ export default function InvoiceDetails() {
                               className="w-full justify-start"
                               onClick={() => setPdfViewerOpen(true)}
                             >
-                              <Eye className="h-4 w-4 mr-2" />
+                              <Icon name="eye" size={14} />
                               Ver PDF
                             </Button>
                             <Button
-                              variant="default"
+                              variant="clay"
                               className="w-full justify-start"
                               asChild
                             >
                               <a href={invoice.pdfUrl} target="_blank" rel="noopener noreferrer" download>
-                                <Download className="h-4 w-4 mr-2" />
+                                <Icon name="download" size={14} />
                                 Descargar PDF
                               </a>
                             </Button>
@@ -411,36 +403,36 @@ export default function InvoiceDetails() {
                         )}
                         {invoice.xmlUrl && (
                           <Button
-                            variant="secondary"
+                            variant="outline"
                             className="w-full justify-start"
                             asChild
                           >
                             <a href={invoice.xmlUrl} target="_blank" rel="noopener noreferrer" download>
-                              <Download className="h-4 w-4 mr-2" />
+                              <Icon name="download" size={14} />
                               Descargar XML
                             </a>
                           </Button>
                         )}
                         {!invoice.pdfUrl && !invoice.xmlUrl && (
-                          <p className="text-sm text-muted-foreground text-center py-4">
+                          <p className="text-[12px] text-ink-3 text-center py-4">
                             No hay archivos disponibles
                           </p>
                         )}
                       </div>
                     </div>
 
-                    {/* Admin Actions */}
+                    {/* Admin actions */}
                     {isAdmin && (
                       <div>
-                        <h4 className="font-medium mb-3 text-muted-foreground">
+                        <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-2">
                           Administración
-                        </h4>
+                        </p>
                         <Button
                           variant="destructive"
                           className="w-full justify-start"
                           onClick={() => setShowDeleteDialog(true)}
                         >
-                          <Trash2 className="h-4 w-4 mr-2" />
+                          <Trash2 className="h-4 w-4" />
                           Eliminar Factura
                         </Button>
                       </div>
@@ -456,7 +448,9 @@ export default function InvoiceDetails() {
         <Dialog open={pdfViewerOpen} onOpenChange={setPdfViewerOpen}>
           <DialogContent className="max-w-5xl max-h-[95vh] overflow-hidden">
             <DialogHeader>
-              <DialogTitle>Vista de PDF - {invoice.folio}</DialogTitle>
+              <DialogTitle className="font-mono text-[14px]">
+                {invoice.folio} — Vista PDF
+              </DialogTitle>
             </DialogHeader>
             {invoice.pdfUrl && (
               <div className="h-[70vh] w-full">
@@ -474,14 +468,15 @@ export default function InvoiceDetails() {
         <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Confirmar Eliminación</DialogTitle>
-              <DialogDescription>
-                ¿Estás seguro de que deseas eliminar la factura {invoice.folio}?
+              <DialogTitle>Confirmar eliminación</DialogTitle>
+              <DialogDescription className="text-[13px] text-ink-3 mt-1.5">
+                ¿Estás seguro de que deseas eliminar la factura{" "}
+                <span className="font-mono text-ink">{invoice.folio}</span>?
                 Esta acción no se puede deshacer.
               </DialogDescription>
             </DialogHeader>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
+            <DialogFooter className="gap-2">
+              <Button variant="ghost" onClick={() => setShowDeleteDialog(false)}>
                 Cancelar
               </Button>
               <Button variant="destructive" onClick={handleDelete}>

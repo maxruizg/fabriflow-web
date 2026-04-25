@@ -2,50 +2,155 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * FabriFlow design system — warm industrial palette in oklch.
+ *
+ * shadcn-compatible variables use space-separated oklch components so Tailwind
+ * can wrap them with `oklch(var(--token) / <alpha-value>)` and the standard
+ * `bg-primary/90` opacity modifiers keep working.
+ *
+ * Raw `--paper`, `--ink`, `--clay`, etc. tokens are also exposed for primitives
+ * that need a literal oklch() value (e.g. inline gradients, box-shadows).
+ */
 @layer base {
   :root {
-    --background: 0 0% 100%; /* white */
-    --foreground: 240 10% 3.9%; /* zinc-950 */
-    --card: 0 0% 100%; /* white */
-    --card-foreground: 240 10% 3.9%; /* zinc-950 */
-    --popover: 0 0% 100%; /* white */
-    --popover-foreground: 240 10% 3.9%; /* zinc-950 */
-    --primary: 45.4 93.4% 47.5%; /* amber-500 */
-    --primary-foreground: 0 0% 100%; /* white */
-    --secondary: 240 4.8% 95.9%; /* zinc-100 */
-    --secondary-foreground: 240 5.9% 10%; /* zinc-900 */
-    --muted: 240 4.8% 95.9%; /* zinc-100 */
-    --muted-foreground: 240 3.8% 46.1%; /* zinc-500 */
-    --accent: 240 4.8% 95.9%; /* zinc-100 */
-    --accent-foreground: 240 5.9% 10%; /* zinc-900 */
-    --destructive: 0 84.2% 60.2%; /* red-500 */
-    --destructive-foreground: 0 0% 100%; /* white */
-    --border: 240 5.9% 90%; /* zinc-200 */
-    --input: 240 5.9% 90%; /* zinc-200 */
-    --ring: 45.4 93.4% 47.5%; /* amber-500 */
-    --radius: 0.5rem;
+    /*
+     * Tell the browser this page is light by design. Without this, browsers
+     * on macOS / iOS / Windows-with-dark-mode-on apply an "auto-adapt" pass
+     * that paints a translucent gray film over light pages and inverts form
+     * controls. Setting it explicitly removes the filter.
+     */
+    color-scheme: light;
+
+    /*
+     * Shadcn surface tokens (oklch components — three numbers, no `oklch()` wrapper,
+     * so Tailwind can apply alpha via `oklch(var(--token) / <alpha-value>)`).
+     *
+     * Key revisions vs first pass:
+     *   - +chroma on every accent so the warm system reads as warm, not gray.
+     *   - Darker ink (0.18) for stronger body/text contrast against paper.
+     *   - Slightly more chroma on paper neutrals so the "warm" hue is visible.
+     */
+    /*
+     * Paper neutrals: match the original prototype — near-white with the
+     * tiniest hint of warmth. Earlier iterations pushed lightness down
+     * thinking it would warm up, but it just made the page read as cream/
+     * sepia, which the user perceives as fog. Lightness is back at 0.98
+     * with chroma at 0.008 so the page reads as clean paper, and the
+     * vibrancy comes from the clay/moss/rust/wine accents below.
+     */
+    --background: 0.985 0.008 75;
+    --foreground: 0.18 0.018 50;
+    --card: 0.99 0.006 75;
+    --card-foreground: 0.18 0.018 50;
+    --popover: 0.99 0.006 75;
+    --popover-foreground: 0.18 0.018 50;
+    --primary: 0.58 0.18 40;
+    --primary-foreground: 0.99 0.006 75;
+    --secondary: 0.94 0.012 72;
+    --secondary-foreground: 0.32 0.022 50;
+    --muted: 0.97 0.008 75;
+    --muted-foreground: 0.5 0.018 55;
+    --accent: 0.94 0.012 72;
+    --accent-foreground: 0.18 0.018 50;
+    --destructive: 0.48 0.2 25;
+    --destructive-foreground: 0.99 0.006 75;
+    --border: 0.9 0.014 70;
+    --line-soft: 0.84 0.018 65;
+    --input: 0.84 0.018 65;
+    --ring: 0.58 0.18 40;
+    --radius: 0.625rem; /* 10px */
+
+    /* design-system literal oklch tokens — clean near-white paper */
+    --paper: oklch(0.99 0.006 75);
+    --paper-2: oklch(0.97 0.008 75);
+    --paper-3: oklch(0.94 0.012 72);
+    --paper-4: oklch(0.96 0.012 72); /* row-hover tint */
+    --line: oklch(0.9 0.014 70);
+    --line-2: oklch(0.84 0.018 65);
+    --ink: oklch(0.18 0.018 50);
+    --ink-2: oklch(0.34 0.022 50);
+    --ink-3: oklch(0.5 0.02 55);
+    --ink-4: oklch(0.66 0.018 60);
+    --ink-bg: oklch(0.22 0.018 50);
+
+    /* accents — generous chroma so each tone is unambiguously coloured */
+    --clay: oklch(0.6 0.18 40);
+    --clay-soft: oklch(0.86 0.1 45);
+    --clay-deep: oklch(0.42 0.16 38);
+    --moss: oklch(0.54 0.15 140);
+    --moss-soft: oklch(0.88 0.085 140);
+    --moss-deep: oklch(0.34 0.13 140);
+    --rust: oklch(0.7 0.2 60);
+    --rust-soft: oklch(0.9 0.12 70);
+    --rust-deep: oklch(0.45 0.16 55);
+    --wine: oklch(0.5 0.21 25);
+    --wine-soft: oklch(0.88 0.1 25);
+
+    --shadow-sm: 0 1px 0 oklch(0.86 0.022 70);
+    --shadow: 0 1px 2px oklch(0.18 0.02 50 / 0.07),
+      0 4px 12px oklch(0.18 0.02 50 / 0.05);
+    --shadow-lg: 0 1px 0 oklch(0.97 0.012 75 / 0.5) inset,
+      0 12px 40px oklch(0.18 0.02 50 / 0.18);
+
+    /*
+     * Dot grid is OPT-IN now. Multiple iterations showed it always reads as
+     * fog rather than texture on most monitors, so the body no longer paints
+     * one. The token is kept for surfaces that explicitly want a stippled
+     * texture (e.g. login hero panel) — they re-enable it locally.
+     */
+    --dot-grid: none;
   }
 
+  /*
+   * Dark mode keeps the warm bones but inverts surfaces.
+   * `--ink-bg` is the deep ink that becomes the background.
+   */
   .dark {
-    --background: 240 10% 3.9%; /* zinc-950 */
-    --foreground: 0 0% 98%; /* zinc-50 */
-    --card: 240 3.7% 15.9%; /* zinc-800 */
-    --card-foreground: 0 0% 98%; /* zinc-50 */
-    --popover: 240 3.7% 15.9%; /* zinc-800 */
-    --popover-foreground: 0 0% 98%; /* zinc-50 */
-    --primary: 45.4 93.4% 47.5%; /* amber-500 */
-    --primary-foreground: 240 10% 3.9%; /* zinc-950 */
-    --secondary: 240 5.9% 10%; /* zinc-900 */
-    --secondary-foreground: 0 0% 98%; /* zinc-50 */
-    --muted: 240 3.7% 15.9%; /* zinc-800 */
-    --muted-foreground: 240 5% 64.9%; /* zinc-400 */
-    --accent: 240 3.7% 15.9%; /* zinc-800 */
-    --accent-foreground: 0 0% 98%; /* zinc-50 */
-    --destructive: 0 84.2% 60.2%; /* red-500 */
-    --destructive-foreground: 0 0% 98%; /* zinc-50 */
-    --border: 240 3.7% 20.5%; /* zinc-700 */
-    --input: 240 3.7% 15.9%; /* zinc-700 */
-    --ring: 45.4 93.4% 47.5%; /* amber-500 */
+    color-scheme: dark;
+
+    --background: 0.24 0.015 50;
+    --foreground: 0.93 0.008 75;
+    --card: 0.28 0.015 50;
+    --card-foreground: 0.93 0.008 75;
+    --popover: 0.28 0.015 50;
+    --popover-foreground: 0.93 0.008 75;
+    --primary: 0.65 0.13 42;
+    --primary-foreground: 0.16 0.012 50;
+    --secondary: 0.32 0.018 50;
+    --secondary-foreground: 0.85 0.01 70;
+    --muted: 0.3 0.015 50;
+    --muted-foreground: 0.7 0.015 60;
+    --accent: 0.32 0.018 50;
+    --accent-foreground: 0.93 0.008 75;
+    --destructive: 0.55 0.16 25;
+    --destructive-foreground: 0.95 0.008 75;
+    --border: 0.36 0.018 50;
+    --input: 0.36 0.018 50;
+    --ring: 0.65 0.13 42;
+
+    --paper: oklch(0.24 0.015 50);
+    --paper-2: oklch(0.28 0.015 50);
+    --paper-3: oklch(0.32 0.018 50);
+    --paper-4: oklch(0.3 0.018 50);
+    --line: oklch(0.36 0.018 50);
+    --line-2: oklch(0.42 0.018 50);
+    --ink: oklch(0.93 0.008 75);
+    --ink-2: oklch(0.82 0.01 70);
+    --ink-3: oklch(0.7 0.015 60);
+    --ink-4: oklch(0.55 0.018 55);
+
+    --clay: oklch(0.65 0.13 42);
+    --clay-soft: oklch(0.38 0.08 42);
+    --clay-deep: oklch(0.45 0.12 40);
+    --moss-soft: oklch(0.32 0.06 140);
+    --rust-soft: oklch(0.38 0.08 60);
+    --wine-soft: oklch(0.36 0.1 25);
+
+    --dot-grid: radial-gradient(
+      oklch(0.42 0.018 50 / 0.5) 1px,
+      transparent 1px
+    );
   }
 }
 
@@ -53,7 +158,434 @@
   * {
     @apply border-border;
   }
+
+  html,
+  body {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
   body {
     @apply bg-background text-foreground;
+    /*
+     * No background-image on body by default — it was creating a hazy
+     * over-texture on every page. Pages that want stipple use their own
+     * local pattern (see login hero).
+     */
+    min-height: 100vh;
+  }
+
+  /*
+   * `body.density-compact` etc. still add classes; for the dot pattern,
+   * `body:not(.no-dot-bg)` previously turned it on. With the grid disabled
+   * by default that toggle is now a no-op — kept for compatibility.
+   */
+  body.no-dot-bg {
+    background-image: none;
+  }
+
+  /* density: compact — tighter rows on data-heavy pages */
+  body.density-compact .ff-table td,
+  body.density-compact [data-density-target="row"] {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+    font-size: 12.5px;
+  }
+  body.density-compact .ff-stat-val {
+    font-size: 26px;
+  }
+  body.density-compact .ff-stat {
+    padding: 14px;
+  }
+
+  /* accent: cool — slate blue */
+  body.theme-cool {
+    --primary: 0.55 0.1 230;
+    --ring: 0.55 0.1 230;
+    --clay: oklch(0.55 0.1 230);
+    --clay-soft: oklch(0.92 0.04 230);
+    --clay-deep: oklch(0.4 0.09 230);
+  }
+
+  /* accent: olive — earthy green */
+  body.theme-olive {
+    --primary: 0.55 0.09 115;
+    --ring: 0.55 0.09 115;
+    --clay: oklch(0.55 0.09 115);
+    --clay-soft: oklch(0.92 0.04 115);
+    --clay-deep: oklch(0.38 0.08 115);
+  }
+
+  /* tabular numerals for monospace amounts and IDs */
+  .font-mono,
+  .ff-num {
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+
+  /* fraunces optical-size sweet spot for headings */
+  .font-display {
+    font-optical-sizing: auto;
+    font-variation-settings: "opsz" 60;
+  }
+
+  /* unified focus ring */
+  :focus-visible {
+    outline: 2px solid oklch(var(--ring) / 0.6);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-2);
+    border-radius: 5px;
+    border: 2px solid var(--paper);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/*
+ * Component-layer helpers used by FabriFlow primitives.
+ * These exist as utility classes (rather than CSS-in-JS) so that the
+ * server-rendered HTML carries them and there is no flash on hydration.
+ */
+@layer components {
+  /* Page chrome */
+  .ff-page-title {
+    font-family: var(--font-display);
+    font-size: 30px;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    color: var(--ink);
+  }
+  .ff-page-title em {
+    font-style: italic;
+    color: var(--clay);
+    font-weight: 400;
+  }
+  .ff-page-sub {
+    color: var(--ink-3);
+    font-size: 14px;
+    margin-top: 6px;
+  }
+
+  /* Stat card */
+  .ff-stat {
+    position: relative;
+    overflow: hidden;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--paper);
+  }
+  .ff-stat-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .ff-stat-val {
+    font-family: var(--font-display);
+    font-size: 32px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin-top: 6px;
+    line-height: 1;
+    color: var(--ink);
+  }
+
+  /* Tone badges (for new Badge variants) */
+  .ff-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    padding: 3px 7px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    font-weight: 500;
+    white-space: nowrap;
+    border: 0;
+  }
+  .ff-badge::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .ff-badge.ff-no-dot::before {
+    display: none;
+  }
+  .ff-badge-moss {
+    background: var(--moss-soft);
+    color: var(--moss-deep);
+  }
+  .ff-badge-clay {
+    background: var(--clay-soft);
+    color: var(--clay-deep);
+  }
+  .ff-badge-rust {
+    background: var(--rust-soft);
+    color: var(--rust-deep);
+  }
+  .ff-badge-wine {
+    background: var(--wine-soft);
+    color: var(--wine);
+  }
+  .ff-badge-ink {
+    background: var(--paper-3);
+    color: var(--ink-2);
+  }
+
+  /* Table styling */
+  .ff-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .ff-table th {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper-2);
+    white-space: nowrap;
+  }
+  .ff-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    vertical-align: middle;
+    color: var(--ink);
+  }
+  .ff-table tr:hover td {
+    background: var(--paper-4);
+  }
+  .ff-table tr:last-child td {
+    border-bottom: 0;
+  }
+  .ff-table th:first-child,
+  .ff-table td:first-child {
+    padding-left: 18px;
+  }
+  .ff-table th:last-child,
+  .ff-table td:last-child {
+    padding-right: 18px;
+  }
+
+  /* Aging bar */
+  .ff-bar {
+    height: 6px;
+    background: var(--paper-3);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+  .ff-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--moss);
+    border-radius: 3px;
+  }
+  .ff-bar.ff-bar-clay > span {
+    background: var(--clay);
+  }
+  .ff-bar.ff-bar-rust > span {
+    background: var(--rust);
+  }
+  .ff-bar.ff-bar-wine > span {
+    background: var(--wine);
+  }
+
+  /* Pill segmented control */
+  .ff-pills {
+    display: inline-flex;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    padding: 3px;
+    background: var(--paper);
+  }
+  .ff-pill {
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+    border-radius: 5px;
+    transition: background 0.12s, color 0.12s;
+    cursor: pointer;
+  }
+  .ff-pill:hover {
+    color: var(--ink);
+  }
+  .ff-pill[data-active="true"] {
+    background: var(--ink);
+    color: var(--paper);
+  }
+
+  /* DocChip — folded-corner document tag */
+  .ff-docchip {
+    width: 28px;
+    height: 34px;
+    flex-shrink: 0;
+    background: var(--paper);
+    border: 1px solid var(--line-2);
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--clay);
+    display: grid;
+    place-items: center;
+    position: relative;
+  }
+  .ff-docchip::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    border-width: 6px;
+    border-style: solid;
+    border-color: var(--paper-3) var(--paper-3) transparent transparent;
+  }
+  .ff-docchip[data-absent="true"] {
+    color: var(--ink-4);
+    opacity: 0.25;
+  }
+
+  /* Dropzone */
+  .ff-dropzone {
+    border: 1.5px dashed var(--line-2);
+    border-radius: var(--radius);
+    padding: 24px;
+    text-align: center;
+    background: repeating-linear-gradient(
+      45deg,
+      transparent 0 8px,
+      oklch(0.94 0.012 72) 8px 9px
+    );
+    color: var(--ink-3);
+  }
+
+  /* Timeline */
+  .ff-tl-item {
+    display: grid;
+    grid-template-columns: 16px 1fr;
+    gap: 12px;
+    padding: 8px 0;
+    position: relative;
+  }
+  .ff-tl-item::before {
+    content: "";
+    position: absolute;
+    left: 7px;
+    top: 20px;
+    bottom: -8px;
+    width: 1px;
+    background: var(--line-2);
+  }
+  .ff-tl-item:last-child::before {
+    display: none;
+  }
+  .ff-tl-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--paper);
+    box-shadow: 0 0 0 1px var(--line-2);
+    background: var(--paper-3);
+    margin-top: 3px;
+  }
+  .ff-tl-dot.ff-tl-clay {
+    background: var(--clay);
+    box-shadow: 0 0 0 1px var(--clay);
+  }
+  .ff-tl-dot.ff-tl-moss {
+    background: var(--moss);
+    box-shadow: 0 0 0 1px var(--moss);
+  }
+  .ff-tl-dot.ff-tl-rust {
+    background: var(--rust);
+    box-shadow: 0 0 0 1px var(--rust);
+  }
+  .ff-tl-dot.ff-tl-wine {
+    background: var(--wine);
+    box-shadow: 0 0 0 1px var(--wine);
+  }
+
+  /* Heatmap (12-column delivery grid) */
+  .ff-heatmap {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 3px;
+  }
+  .ff-heatmap > div {
+    aspect-ratio: 1;
+    border-radius: 3px;
+    background: var(--paper-3);
+  }
+  .ff-heatmap > div[data-v="1"] {
+    background: oklch(0.9 0.04 45);
+  }
+  .ff-heatmap > div[data-v="2"] {
+    background: oklch(0.78 0.09 45);
+  }
+  .ff-heatmap > div[data-v="3"] {
+    background: oklch(0.65 0.12 42);
+  }
+  .ff-heatmap > div[data-v="4"] {
+    background: oklch(0.5 0.14 40);
+  }
+
+  /* Delivery dots */
+  .ff-dots {
+    display: inline-flex;
+    gap: 3px;
+  }
+  .ff-dots > span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--paper-3);
+    display: inline-block;
+  }
+  .ff-dots > span[data-state="on"] {
+    background: var(--moss);
+  }
+  .ff-dots > span[data-state="late"] {
+    background: var(--rust);
+  }
+  .ff-dots > span[data-state="miss"] {
+    background: var(--wine);
+  }
+}
+
+/*
+ * Reduce motion when the user has indicated they prefer it.
+ * We keep instant feedback (active states) but disable easing/slide animations.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

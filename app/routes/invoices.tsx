@@ -27,7 +27,12 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { Badge } from "~/components/ui/badge";
-import { Search, FileText, Download, Eye, RefreshCw, Filter, X, Plus, Calendar, Building2, Hash, DollarSign, FileCheck, ExternalLink, File } from "lucide-react";
+import { Icon } from "~/components/ui/icon";
+import { Toolbar } from "~/components/ui/toolbar";
+import { TabsCount } from "~/components/ui/tabs";
+import { DocStrip, type DocType } from "~/components/ui/doc-chip";
+import { statusTone, statusLabel, cn } from "~/lib/utils";
+import { Search, FileText, Download, RefreshCw, Filter, X, Plus, Calendar, Building2, Hash, DollarSign, FileCheck, ExternalLink, File } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -168,37 +173,11 @@ export async function action({ request }: ActionFunctionArgs) {
   return json({ success: false, error: "Acción no válida" }, { status: 400 });
 }
 
-function getStatusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
-  switch (status.toLowerCase()) {
-    case "pagado":
-    case "paid":
-    case "completado":
-      return "default";
-    case "pendiente":
-    case "pending":
-    case "recibido":
-      return "secondary";
-    case "rechazado":
-    case "rejected":
-    case "overdue":
-      return "destructive";
-    default:
-      return "outline";
-  }
-}
-
-function getStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    pendiente: "Pendiente",
-    recibido: "Recibido",
-    pagado: "Pagado",
-    completado: "Completado",
-    rechazado: "Rechazado",
-    pending: "Pendiente",
-    paid: "Pagado",
-    overdue: "Vencido",
-  };
-  return labels[status.toLowerCase()] || status;
+function inferDocs(inv: InvoiceBackend): DocType[] {
+  const docs: DocType[] = [];
+  if (inv.ordenCompraUrl) docs.push("OC");
+  if (inv.xmlUrl || inv.pdfUrl) docs.push("FAC");
+  return docs;
 }
 
 export default function Invoices() {
@@ -358,32 +337,18 @@ export default function Invoices() {
 
   return (
     <AuthLayout>
-      <div className="h-[calc(100vh-7rem)] flex flex-col gap-3">
-        {/* Header compacto con stats inline */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <h2 className="text-xl font-semibold">Facturas</h2>
-            {/* Stats inline */}
-            <div className="hidden md:flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">Total:</span>
-                <span className="font-semibold">{totalFacturas}</span>
-              </div>
-              <div className="h-4 w-px bg-border" />
-              <div className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">Monto:</span>
-                <span className="font-semibold text-primary">
-                  ${montoTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                </span>
-              </div>
-              <div className="h-4 w-px bg-border" />
-              <div className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">Pendiente:</span>
-                <span className="font-semibold text-orange-500">
-                  ${montoPendiente.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                </span>
-              </div>
-            </div>
+      <div className="space-y-5">
+        {/* Page header */}
+        <header className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="ff-page-title">
+              Facturas <em>CFDI</em>
+            </h1>
+            <p className="ff-page-sub">
+              {isVendor
+                ? "Sube y gestiona las facturas que has emitido a tus clientes."
+                : "Recibe, valida y concilia facturas emitidas por tus proveedores."}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -391,56 +356,80 @@ export default function Invoices() {
               size="icon"
               onClick={() => revalidator.revalidate()}
               disabled={revalidator.state === "loading"}
-              title="Actualizar"
+              aria-label="Actualizar"
             >
-              <RefreshCw className={`h-4 w-4 ${revalidator.state === "loading" ? "animate-spin" : ""}`} />
+              <RefreshCw className={cn("h-4 w-4", revalidator.state === "loading" && "animate-spin")} />
             </Button>
-            <Button variant="ghost" size="icon" title="Exportar">
-              <Download className="h-4 w-4" />
+            <Button variant="outline" size="sm" aria-label="Exportar">
+              <Icon name="download" size={13} />
+              <span className="hidden sm:inline">Exportar</span>
             </Button>
-            {(isVendor || user?.permissions?.includes("invoices:create")) && (
-              <Button
-                size="sm"
-                onClick={() => navigate("/invoices/new")}
-              >
-                <Plus className="mr-1.5 h-4 w-4" />
-                Cargar
+            {(isVendor || user?.permissions?.includes("invoices:create")) ? (
+              <Button size="sm" onClick={() => navigate("/invoices/new")} variant="clay">
+                <Icon name="plus" size={13} />
+                Subir factura
               </Button>
-            )}
+            ) : null}
+          </div>
+        </header>
+
+        {/* Inline KPIs */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="ff-stat">
+            <div className="ff-stat-label">Total</div>
+            <div className="ff-stat-val ff-num">{totalFacturas}</div>
+            <div className="text-[11px] text-ink-3 mt-2 font-mono">
+              Facturas en la lista actual
+            </div>
+          </div>
+          <div className="ff-stat">
+            <div className="ff-stat-label">Importe total</div>
+            <div className="ff-stat-val ff-num">
+              <span className="text-[18px] italic text-ink-3 mr-1">$</span>
+              {montoTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+            </div>
+            <div className="text-[11px] text-ink-3 mt-2 font-mono">MXN equivalente</div>
+          </div>
+          <div className="ff-stat">
+            <div className="ff-stat-label">Pendiente</div>
+            <div className="ff-stat-val ff-num">
+              <span className="text-[18px] italic text-ink-3 mr-1">$</span>
+              {montoPendiente.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+            </div>
+            <div className="text-[11px] text-rust-deep mt-2 font-mono">
+              · Pendiente + recibido
+            </div>
           </div>
         </div>
 
-        {/* Filtros compactos */}
-        <div className="flex flex-wrap items-center gap-2 pb-1">
-          <div className="relative min-w-[160px] max-w-[200px]">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+        {/* Toolbar */}
+        <Toolbar>
+          <div className="relative min-w-[200px]">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-ink-3" />
             <Input
-              placeholder="Proveedor..."
-              className="pl-8 h-9"
+              placeholder="Buscar proveedor…"
+              className="pl-8"
               value={proveedorFilter}
               onChange={(e) => setProveedorFilter(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && applyFilters()}
             />
           </div>
-
           <Input
             placeholder="Folio"
-            className="w-[100px] h-9"
+            className="w-[110px]"
             value={folioFilter}
             onChange={(e) => setFolioFilter(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && applyFilters()}
           />
-
           <Input
             placeholder="UUID"
-            className="w-[140px] h-9 font-mono text-xs"
+            className="w-[150px] font-mono text-[12px]"
             value={uuidFilter}
             onChange={(e) => setUuidFilter(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && applyFilters()}
           />
-
-          <Select value={estadoFilter} onValueChange={(v) => { setEstadoFilter(v); }}>
-            <SelectTrigger className="w-[120px] h-9">
+          <Select value={estadoFilter} onValueChange={setEstadoFilter}>
+            <SelectTrigger className="w-[140px] h-9">
               <SelectValue placeholder="Estado" />
             </SelectTrigger>
             <SelectContent>
@@ -452,103 +441,115 @@ export default function Invoices() {
               <SelectItem value="rechazado">Rechazado</SelectItem>
             </SelectContent>
           </Select>
-
           <Input
             type="date"
             value={fechaDesde}
             onChange={(e) => setFechaDesde(e.target.value)}
-            className="w-[130px] h-9"
+            className="w-[140px]"
             title="Desde"
           />
-
           <Input
             type="date"
             value={fechaHasta}
             onChange={(e) => setFechaHasta(e.target.value)}
-            className="w-[130px] h-9"
+            className="w-[140px]"
             title="Hasta"
           />
-
-          <Button onClick={applyFilters} size="sm" variant="secondary" className="h-9">
+          <Button onClick={applyFilters} size="sm" variant="outline">
             <Filter className="mr-1.5 h-3.5 w-3.5" />
             Filtrar
           </Button>
-
-          {hasActiveFilters && (
-            <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 px-2">
+          {hasActiveFilters ? (
+            <Button variant="ghost" size="sm" onClick={clearFilters} aria-label="Limpiar filtros">
               <X className="h-4 w-4" />
             </Button>
-          )}
-        </div>
+          ) : null}
+          <Toolbar.Spacer />
+          <Toolbar.Summary>
+            {allInvoices.length} resultados · ${montoTotal.toLocaleString("es-MX", { minimumFractionDigits: 0 })} MXN
+          </Toolbar.Summary>
+        </Toolbar>
 
-        {/* Tabla - ocupa todo el espacio restante */}
-        <Card className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-auto">
+        {/* Table */}
+        <Card>
+          <div className="overflow-auto">
             <Table>
               <TableHeader>
-                <TableRow className="hover:bg-transparent border-b">
-                  <TableHead className="h-10 text-xs font-semibold">Proveedor</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold w-[90px]">Folio</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold w-[130px]">UUID</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold w-[90px]">Fecha</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold text-right w-[110px]">Subtotal</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold text-right w-[120px]">Total</TableHead>
-                  <TableHead className="h-10 text-xs font-semibold text-center w-[110px]">Estado</TableHead>
+                <TableRow>
+                  <TableHead>Proveedor</TableHead>
+                  <TableHead className="w-[110px]">Folio</TableHead>
+                  <TableHead className="w-[140px]">UUID</TableHead>
+                  <TableHead className="w-[80px]">Docs</TableHead>
+                  <TableHead className="w-[100px]">Fecha</TableHead>
+                  <TableHead className="w-[120px] text-right">Subtotal</TableHead>
+                  <TableHead className="w-[140px] text-right">Total</TableHead>
+                  <TableHead className="w-[140px]">Estado</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {allInvoices.map((invoice) => (
                   <TableRow
                     key={invoice.id}
-                    className="group cursor-pointer hover:bg-muted/50"
+                    className="cursor-pointer"
                     onDoubleClick={() => {
                       setSelectedInvoice(invoice);
                       setIsDetailOpen(true);
                     }}
                   >
-                    <TableCell className="py-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                          <Building2 className="h-3.5 w-3.5 text-primary" />
-                        </div>
+                    <TableCell>
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="grid h-7 w-7 place-items-center rounded-full bg-clay-soft text-clay-deep font-display text-[12px] font-semibold flex-shrink-0">
+                          {invoice.nombreEmisor.slice(0, 2).toUpperCase()}
+                        </span>
                         <div className="min-w-0">
-                          <p className="font-medium text-sm truncate max-w-[200px]">{invoice.nombreEmisor}</p>
-                          <p className="text-xs text-muted-foreground">{invoice.rfcEmisor}</p>
+                          <p className="font-medium text-[13px] truncate max-w-[220px]">
+                            {invoice.nombreEmisor}
+                          </p>
+                          <p className="font-mono text-[11px] text-ink-3">{invoice.rfcEmisor}</p>
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="py-2.5">
-                      <span className="font-mono text-sm">{invoice.folio}</span>
-                    </TableCell>
-                    <TableCell className="py-2.5">
-                      <span className="font-mono text-xs text-muted-foreground" title={invoice.uuid}>
-                        {invoice.uuid.slice(0, 8)}...{invoice.uuid.slice(-4)}
+                    <TableCell className="font-mono text-[12px]">{invoice.folio}</TableCell>
+                    <TableCell>
+                      <span
+                        className="font-mono text-[11px] text-ink-3"
+                        title={invoice.uuid}
+                      >
+                        {invoice.uuid.slice(0, 8)}…{invoice.uuid.slice(-4)}
                       </span>
                     </TableCell>
-                    <TableCell className="py-2.5 text-sm tabular-nums text-muted-foreground">
+                    <TableCell>
+                      <DocStrip docs={inferDocs(invoice)} />
+                    </TableCell>
+                    <TableCell className="font-mono text-[12px] text-ink-3">
                       {new Date(invoice.fechaEmision).toLocaleDateString("es-MX", {
                         day: "2-digit",
-                        month: "short"
+                        month: "short",
                       })}
                     </TableCell>
-                    <TableCell className="py-2.5 text-right text-sm tabular-nums text-muted-foreground">
+                    <TableCell className="text-right font-mono text-ink-3 text-[12px]">
                       ${invoice.subtotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                     </TableCell>
-                    <TableCell className="py-2.5 text-right">
-                      <span className="font-semibold text-sm tabular-nums">
+                    <TableCell className="text-right">
+                      <span className="font-mono font-medium text-[13px]">
                         ${invoice.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                       </span>
-                      <span className="text-[10px] text-muted-foreground ml-0.5">{invoice.moneda}</span>
+                      <span className="ml-1 font-mono text-[10px] text-ink-3">
+                        {invoice.moneda}
+                      </span>
                     </TableCell>
-                    <TableCell className="py-2.5 text-center">
+                    <TableCell>
                       {isAdmin ? (
                         <Select
                           value={invoice.estado}
                           onValueChange={(value) => handleStatusChange(invoice.id, value)}
                         >
-                          <SelectTrigger className="w-[100px] h-7 text-xs mx-auto" onClick={(e) => e.stopPropagation()}>
-                            <Badge variant={getStatusBadgeVariant(invoice.estado)} className="text-xs px-1.5 py-0">
-                              {getStatusLabel(invoice.estado)}
+                          <SelectTrigger
+                            className="w-[140px] h-8 text-[12px]"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Badge tone={statusTone(invoice.estado)}>
+                              {statusLabel(invoice.estado)}
                             </Badge>
                           </SelectTrigger>
                           <SelectContent>
@@ -560,36 +561,43 @@ export default function Invoices() {
                           </SelectContent>
                         </Select>
                       ) : (
-                        <Badge variant={getStatusBadgeVariant(invoice.estado)} className="text-xs px-1.5 py-0">
-                          {getStatusLabel(invoice.estado)}
+                        <Badge tone={statusTone(invoice.estado)}>
+                          {statusLabel(invoice.estado)}
                         </Badge>
                       )}
                     </TableCell>
                   </TableRow>
                 ))}
-                {allInvoices.length === 0 && (
+                {allInvoices.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                      <FileText className="h-10 w-10 mx-auto mb-3 opacity-40" />
-                      <p className="font-medium">No se encontraron facturas</p>
-                      <p className="text-sm mt-1">Intenta ajustar los filtros de búsqueda</p>
+                    <TableCell colSpan={8} className="text-center py-14">
+                      <Icon
+                        name="file"
+                        size={32}
+                        className="mx-auto mb-3 text-ink-4"
+                      />
+                      <p className="font-medium text-[13px] text-ink-2">
+                        No se encontraron facturas
+                      </p>
+                      <p className="text-[11px] text-ink-3 mt-1">
+                        Intenta ajustar los filtros de búsqueda
+                      </p>
                     </TableCell>
                   </TableRow>
-                )}
+                ) : null}
               </TableBody>
             </Table>
 
-            {/* Load more trigger for infinite scroll */}
-            {hasMore && (
+            {hasMore ? (
               <div ref={loadMoreRef} className="py-3 text-center">
-                {isLoadingMore && (
-                  <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                {isLoadingMore ? (
+                  <div className="flex items-center justify-center gap-2 text-[12px] text-ink-3">
                     <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    Cargando más...
+                    Cargando más…
                   </div>
-                )}
+                ) : null}
               </div>
-            )}
+            ) : null}
           </div>
         </Card>
       </div>
@@ -608,11 +616,13 @@ export default function Invoices() {
                   {selectedInvoice?.nombreEmisor}
                 </p>
               </div>
-              {selectedInvoice && (
-                <Badge variant={getStatusBadgeVariant(selectedInvoice.estado)} className="ml-auto">
-                  {getStatusLabel(selectedInvoice.estado)}
-                </Badge>
-              )}
+              {selectedInvoice ? (
+                <span className="ml-auto">
+                  <Badge tone={statusTone(selectedInvoice.estado)}>
+                    {statusLabel(selectedInvoice.estado)}
+                  </Badge>
+                </span>
+              ) : null}
             </DialogTitle>
           </DialogHeader>
 
