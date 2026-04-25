@@ -8,7 +8,6 @@ import {
   Form,
   Link,
   useActionData,
-  useLoaderData,
   useNavigation,
 } from "@remix-run/react";
 import { useState } from "react";
@@ -25,16 +24,10 @@ import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { ThemeToggle } from "../../components/ui/theme-toggle";
-import { Loader2, Eye, EyeOff, AlertTriangle, Factory, ServerCrash } from "lucide-react";
-import { createUserSession } from "~/lib/session.server";
+import { Loader2, Eye, EyeOff, AlertTriangle, Factory, Building2, Truck } from "lucide-react";
+import { createUserSession, getUserFromSession } from "~/lib/session.server";
 import { login } from "~/lib/auth.server";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "~/components/ui/select";
+import { redirect } from "@remix-run/cloudflare";
 
 export const meta: MetaFunction = () => {
   return [
@@ -47,99 +40,85 @@ export const meta: MetaFunction = () => {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  // Allow access to login page without checking authentication
-  // const user = await getUserFromSession(request);
-  // if (user) {
-  //   throw redirect("/dashboard");
-  // }
-
-  // Fetch companies from API
-  const { fetchCompanies } = await import("~/lib/api.server");
-  try {
-    const companies = await fetchCompanies();
-    return json({ companies, serverError: null });
-  } catch (error) {
-    console.error("Failed to fetch companies:", error);
-    const errorMessage = error instanceof Error
-      ? error.message
-      : "No se pudo conectar al servidor. Por favor intente más tarde.";
-    return json({ companies: [], serverError: errorMessage });
+  // Check if user is already logged in
+  const user = await getUserFromSession(request);
+  if (user) {
+    throw redirect("/dashboard");
   }
+  return json({});
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const formData = await request.formData();
+  const loginType = formData.get("loginType")?.toString() || "email";
   const email = formData.get("email")?.toString();
+  const rfc = formData.get("rfc")?.toString();
   const password = formData.get("password")?.toString();
-  const company = formData.get("company")?.toString();
 
-  if (!email || !password) {
-    return json({
-      error: "Email y contraseña son requeridos",
-    });
-  }
-
-  if (!company) {
-    return json({
-      error: "Por favor selecciona una empresa",
-    });
+  // Validate based on login type
+  if (loginType === "rfc") {
+    if (!rfc || !password) {
+      return json({
+        error: "RFC y contraseña son requeridos",
+      });
+    }
+  } else {
+    if (!email || !password) {
+      return json({
+        error: "Email y contraseña son requeridos",
+      });
+    }
   }
 
   try {
+    // Login with email or RFC
     const loginResponse = await login({
-      email: email,
-      password,
-      company,
+      email: loginType === "email" ? email : undefined,
+      rfc: loginType === "rfc" ? rfc?.toUpperCase() : undefined,
+      password: password!,
     });
 
-    console.log("Login response from auth.server:", loginResponse);
+    console.log("Login response:", JSON.stringify(loginResponse, null, 2));
 
-    if (!loginResponse.success || !loginResponse.user || !loginResponse.token) {
-      console.log(
-        "Login failed:",
-        loginResponse.message || "Credenciales inválidas"
-      );
+    if (!loginResponse.success || !loginResponse.user) {
       return json({
         error: loginResponse.message || "Credenciales inválidas",
       });
     }
 
-    const { user: userData, token } = loginResponse;
+    const { user: userData, token, refreshToken, companies, requiresCompanySelection } = loginResponse;
 
+    // Check user status
     if (userData.status === "pendiente" || userData.status === "rechazado") {
       return json({
-        error:
-          "Este usuario sigue pendiente de aprobación, favor de contactarse con el administrador",
+        error: "Tu cuenta está pendiente de aprobación. Por favor contacta al administrador.",
       });
     }
 
-    console.log("Creating user session with:", {
-      userId: userData.user || userData.email,
-      userInfo: {
-        user: userData.user || userData.email,
-        status: userData.status,
-        role: userData.role,
-        permissions: userData.permissions,
-        company: company,
-      },
-      token: token,
-    });
+    // Determine redirect based on company selection requirement
+    const redirectTo = requiresCompanySelection ? "/select-company" : "/dashboard";
 
     return createUserSession({
       request,
-      userId: userData.user || userData.email,
+      userId: userData.id,
       user: {
-        user: userData.user || userData.email,
+        id: userData.id,
+        email: userData.email,
+        name: userData.name,
         status: userData.status || "active",
-        role: userData.role || "user",
+        role: userData.role,
         permissions: userData.permissions || [],
-        company: company, // Store selected company in session
+        company: userData.company,
+        companyName: userData.companyName,
       },
-      accessToken: token,
-      redirectTo: "/dashboard",
+      accessToken: token || "",
+      refreshToken,
+      companies,
+      requiresCompanySelection,
+      redirectTo,
     });
   } catch (error) {
-    console.error("Login action error details:", error);
+    console.error("Login action error:", error);
     const errorMessage =
       error instanceof Error
         ? error.message
@@ -152,15 +131,11 @@ export async function action({ request }: ActionFunctionArgs) {
 
 export default function Login() {
   const actionData = useActionData<typeof action>();
-  const loaderData = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const [showPassword, setShowPassword] = useState(false);
-  const [selectedCompany, setSelectedCompany] = useState<string>("");
+  const [loginType, setLoginType] = useState<"email" | "rfc">("email");
 
   const isSubmitting = navigation.state === "submitting";
-
-  // Use companies from API or fallback to empty array
-  const companies = loaderData?.companies || [];
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4 relative">
@@ -190,67 +165,92 @@ export default function Login() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {loaderData?.serverError && (
-              <Alert variant="destructive" className="mb-4">
-                <ServerCrash className="h-4 w-4" />
-                <AlertDescription>
-                  {loaderData.serverError}
-                </AlertDescription>
-              </Alert>
-            )}
+            {/* Login type toggle */}
+            <div className="grid grid-cols-2 gap-2 mb-6">
+              <button
+                type="button"
+                onClick={() => setLoginType("email")}
+                className={`flex items-center justify-center space-x-2 rounded-md border-2 px-3 py-2.5 transition-colors ${
+                  loginType === "email"
+                    ? "border-primary bg-primary/5 text-primary"
+                    : "border-muted bg-popover hover:bg-accent"
+                }`}
+              >
+                <Building2 className="h-4 w-4" />
+                <span className="text-sm font-medium">Empresa</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLoginType("rfc")}
+                className={`flex items-center justify-center space-x-2 rounded-md border-2 px-3 py-2.5 transition-colors ${
+                  loginType === "rfc"
+                    ? "border-primary bg-primary/5 text-primary"
+                    : "border-muted bg-popover hover:bg-accent"
+                }`}
+              >
+                <Truck className="h-4 w-4" />
+                <span className="text-sm font-medium">Proveedor</span>
+              </button>
+            </div>
 
             <Form method="post" className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="company">Empresa</Label>
-                <Select
-                  value={selectedCompany}
-                  onValueChange={setSelectedCompany}
-                  required
-                >
-                  <SelectTrigger className="h-11">
-                    <SelectValue placeholder="Selecciona tu empresa" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {companies.length > 0 ? (
-                      companies.map((company) => (
-                        <SelectItem key={company} value={company}>
-                          {company}
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <div className="p-2 text-sm text-muted-foreground">
-                        No hay empresas disponibles
-                      </div>
-                    )}
-                  </SelectContent>
-                </Select>
-                <input type="hidden" name="company" value={selectedCompany} />
-              </div>
+              <input type="hidden" name="loginType" value={loginType} />
+
+              {loginType === "email" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="user-email">Email</Label>
+                  <Input
+                    id="user-email"
+                    name="email"
+                    type="text"
+                    placeholder="ejemplo@empresa.com"
+                    required
+                    className="h-11"
+                    autoComplete="one-time-code"
+                    data-form-type="other"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Label htmlFor="user-rfc">RFC</Label>
+                  <Input
+                    id="user-rfc"
+                    name="rfc"
+                    type="text"
+                    placeholder="XAXX010101000"
+                    required
+                    className="h-11"
+                    maxLength={13}
+                    style={{ textTransform: "uppercase" }}
+                    autoComplete="one-time-code"
+                    data-form-type="other"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Ingresa tu RFC registrado
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2">
-                <Label htmlFor="email">RFC o Email</Label>
-                <Input
-                  id="email"
-                  name="email"
-                  type="text"
-                  placeholder="RFC con homoclave o email"
-                  required
-                  className="h-11"
-                  autoComplete="username"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="password">Contraseña</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password">Contraseña</Label>
+                  <Link
+                    to="/forgot-password"
+                    className="text-sm text-primary hover:underline"
+                  >
+                    ¿Olvidaste tu contraseña?
+                  </Link>
+                </div>
                 <div className="relative">
                   <Input
-                    id="password"
+                    id="user-password"
                     name="password"
                     type={showPassword ? "text" : "password"}
-                    placeholder="Ingresa tu contraseña"
+                    placeholder="********"
                     required
                     className="h-11 pr-10"
-                    autoComplete="current-password"
+                    autoComplete="new-password"
+                    data-form-type="other"
                   />
                   <button
                     type="button"

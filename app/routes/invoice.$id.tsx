@@ -1,28 +1,35 @@
-import type { MetaFunction, LoaderFunctionArgs } from "@remix-run/cloudflare";
-import { useLoaderData, useNavigate } from "@remix-run/react";
+import type { MetaFunction, LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/cloudflare";
+import { useLoaderData, useNavigate, useSubmit, useRevalidator } from "@remix-run/react";
 import { json } from "@remix-run/cloudflare";
 import { AuthLayout } from "~/components/layout/auth-layout";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
-// import { Badge } from "~/components/ui/badge";
+import { Badge } from "~/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "~/components/ui/table";
 import {
   ArrowLeft,
   Eye,
   Download,
-  Upload,
   FileText,
-  Receipt,
-  FileCheck,
-  CreditCard,
-  Package,
+  Trash2,
+  RefreshCw,
 } from "lucide-react";
-import type { Invoice } from "~/types";
+import type { InvoiceBackend, InvoiceStatus } from "~/types";
 import { useState } from "react";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
+  DialogFooter,
 } from "~/components/ui/dialog";
 import {
   Select,
@@ -31,8 +38,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
-import { getStatusBadge } from "~/lib/utils";
-import { requireUser } from "~/lib/session.server";
+import { requireUser, getFullSession } from "~/lib/session.server";
+import { fetchInvoice, updateInvoiceStatus, deleteInvoice, fetchInvoiceUrls } from "~/lib/api.server";
 
 export const meta: MetaFunction = () => {
   return [
@@ -45,227 +52,139 @@ export const meta: MetaFunction = () => {
 };
 
 export async function loader({ params, request }: LoaderFunctionArgs) {
-  // Require authentication for invoice detail access
-  await requireUser(request);
+  const user = await requireUser(request);
+  const session = await getFullSession(request);
 
   const invoiceId = params.id;
 
-  // Hardcoded data for development - using the same data from invoices list
-  const invoices: Invoice[] = [
-    {
-      uuid: "INV-001",
-      folio: "A-2024-001",
-      company: "Textiles del Norte S.A. de C.V.",
-      issuerName: "Proveedor de Algodón Industrial",
-      invoiceDate: "2024-01-15",
-      total: "25500.00",
-      currency: "MXN",
-      status: "paid",
-      urlPdfFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      urlXmlFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      paymentConditions: "30 días",
-      details: [],
-      entryDate: "2024-01-15",
-      paymentMethod: "Transferencia",
-      subtotal: "25000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 0,
-      exchangeRate: "1",
-      complements: [],
-      relatedDocuments: [
-        {
-          type: "order",
-          name: "Orden de Compra A-2024-001",
-          url: "https://via.placeholder.com/800x600/f0f0f0/333333?text=Orden+de+Compra",
-          mimeType: "image/png",
-          uploadDate: "2024-01-10",
-        },
-        {
-          type: "payment",
-          name: "Comprobante de Pago",
-          url: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-          mimeType: "application/pdf",
-          uploadDate: "2024-01-16",
-        },
-      ],
-    },
-    {
-      uuid: "INV-002",
-      folio: "A-2024-002",
-      company: "Manufacturera Industrial Mexicana",
-      issuerName: "Aceros y Metales S.A.",
-      invoiceDate: "2024-01-20",
-      total: "150750.50",
-      currency: "MXN",
-      status: "pending",
-      urlPdfFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      urlXmlFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      paymentConditions: "15 días",
-      details: [],
-      entryDate: "2024-01-20",
-      paymentMethod: "Transferencia",
-      subtotal: "150000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 150750.5,
-      exchangeRate: "1",
-      complements: [],
-      relatedDocuments: [
-        {
-          type: "order",
-          name: "Orden de Compra A-2024-002",
-          url: "https://via.placeholder.com/600x800/e0e0e0/444444?text=Orden+de+Compra+002",
-          mimeType: "image/png",
-          uploadDate: "2024-01-18",
-        },
-      ],
-    },
-    {
-      uuid: "INV-003",
-      folio: "B-2024-015",
-      company: "Fábrica de Componentes Automotrices",
-      issuerName: "Plásticos Industriales del Bajío",
-      invoiceDate: "2024-02-01",
-      total: "89300.00",
-      currency: "MXN",
-      status: "overdue",
-      urlPdfFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      urlXmlFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      paymentConditions: "30 días",
-      details: [],
-      entryDate: "2024-02-01",
-      paymentMethod: "Cheque",
-      subtotal: "89000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 89300.0,
-      exchangeRate: "1",
-      complements: [],
-      relatedDocuments: [],
-    },
-    {
-      uuid: "INV-004",
-      folio: "C-2024-008",
-      company: "Industrias Metálicas del Bajío",
-      issuerName: "Químicos y Pinturas Especiales",
-      invoiceDate: "2024-02-10",
-      total: "45600.00",
-      currency: "MXN",
-      status: "pending",
-      urlPdfFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      urlXmlFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      paymentConditions: "60 días",
-      details: [],
-      entryDate: "2024-02-10",
-      paymentMethod: "Transferencia",
-      subtotal: "45000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 45600.0,
-      exchangeRate: "1",
-      complements: [],
-      relatedDocuments: [
-        {
-          type: "order",
-          name: "Orden de Compra C-2024-008",
-          url: "https://via.placeholder.com/700x500/d0d0d0/555555?text=Orden+Industrial",
-          mimeType: "image/png",
-          uploadDate: "2024-02-08",
-        },
-      ],
-    },
-    {
-      uuid: "INV-005",
-      folio: "A-2024-003",
-      company: "Procesadora de Alimentos San Juan",
-      issuerName: "Empacadora Nacional S.A.",
-      invoiceDate: "2024-02-15",
-      total: "320000.00",
-      currency: "MXN",
-      status: "paid",
-      urlPdfFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      urlXmlFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      paymentConditions: "Contado",
-      details: [],
-      entryDate: "2024-02-15",
-      paymentMethod: "Efectivo",
-      subtotal: "315000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 0,
-      exchangeRate: "1",
-      complements: [],
-      relatedDocuments: [
-        {
-          type: "payment",
-          name: "Comprobante de Pago Efectivo",
-          url: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-          mimeType: "application/pdf",
-          uploadDate: "2024-02-15",
-        },
-      ],
-    },
-  ];
+  if (!invoiceId) {
+    throw new Response("ID de factura requerido", { status: 400 });
+  }
 
-  const invoice = invoices.find((inv) => inv.uuid === invoiceId);
+  if (!session?.accessToken || !user.company) {
+    throw new Response("Sesión inválida", { status: 401 });
+  }
 
-  if (!invoice) {
-    console.error("Invoice not found for ID:", invoiceId);
+  const isAdmin = user.permissions?.includes("*") ||
+                  user.permissions?.includes("invoices:manage") ||
+                  user.permissions?.includes("invoices:update:status");
+
+  try {
+    const invoice = await fetchInvoice(session.accessToken, user.company, invoiceId);
+
+    // Also fetch URLs if available
+    let urls = { pdfUrl: invoice.pdfUrl, xmlUrl: invoice.xmlUrl };
+    try {
+      urls = await fetchInvoiceUrls(session.accessToken, user.company, invoiceId);
+    } catch {
+      // URLs already in invoice object, ignore error
+    }
+
+    return json({
+      invoice: { ...invoice, pdfUrl: urls.pdfUrl, xmlUrl: urls.xmlUrl },
+      isAdmin,
+      error: null,
+    });
+  } catch (error) {
+    console.error("Invoice detail loader error:", error);
     throw new Response("Factura no encontrada", { status: 404 });
   }
-
-  return json({ invoice });
 }
 
-function getDocumentIcon(type: string) {
-  switch (type) {
-    case "order":
-      return <Package className="h-4 w-4" />;
-    case "payment":
-      return <CreditCard className="h-4 w-4" />;
-    case "receipt":
-      return <Receipt className="h-4 w-4" />;
-    case "contract":
-      return <FileCheck className="h-4 w-4" />;
+export async function action({ request, params }: ActionFunctionArgs) {
+  const user = await requireUser(request);
+  const session = await getFullSession(request);
+
+  if (!session?.accessToken || !user.company) {
+    return json({ success: false, error: "Sesión inválida" }, { status: 401 });
+  }
+
+  const invoiceId = params.id;
+  if (!invoiceId) {
+    return json({ success: false, error: "ID requerido" }, { status: 400 });
+  }
+
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "updateStatus") {
+    const newStatus = formData.get("status") as InvoiceStatus;
+
+    if (!newStatus) {
+      return json({ success: false, error: "Estado requerido" }, { status: 400 });
+    }
+
+    try {
+      await updateInvoiceStatus(session.accessToken, user.company, invoiceId, newStatus);
+      return json({ success: true });
+    } catch (error) {
+      console.error("Error updating status:", error);
+      return json({ success: false, error: "Error al actualizar estado" }, { status: 500 });
+    }
+  }
+
+  if (intent === "delete") {
+    try {
+      await deleteInvoice(session.accessToken, user.company, invoiceId);
+      return json({ success: true, deleted: true });
+    } catch (error) {
+      console.error("Error deleting invoice:", error);
+      return json({ success: false, error: "Error al eliminar factura" }, { status: 500 });
+    }
+  }
+
+  return json({ success: false, error: "Acción no válida" }, { status: 400 });
+}
+
+function getStatusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  switch (status.toLowerCase()) {
+    case "pagado":
+    case "completado":
+      return "default";
+    case "pendiente":
+    case "recibido":
+      return "secondary";
+    case "rechazado":
+      return "destructive";
     default:
-      return <FileText className="h-4 w-4" />;
+      return "outline";
   }
 }
 
-function getDocumentTypeName(type: string) {
-  switch (type) {
-    case "order":
-      return "Orden de Compra";
-    case "payment":
-      return "Comprobante de Pago";
-    case "receipt":
-      return "Recibo";
-    case "contract":
-      return "Contrato";
-    default:
-      return "Documento";
-  }
+function getStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pendiente: "Pendiente",
+    recibido: "Recibido",
+    pagado: "Pagado",
+    completado: "Completado",
+    rechazado: "Rechazado",
+  };
+  return labels[status.toLowerCase()] || status;
 }
 
 export default function InvoiceDetails() {
-  const { invoice } = useLoaderData<typeof loader>();
+  const { invoice, isAdmin } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
-  const [selectedDocument, setSelectedDocument] = useState<{
-    url: string;
-    mimeType: string;
-    name: string;
-  } | null>(null);
+  const submit = useSubmit();
+  const revalidator = useRevalidator();
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+
+  const handleStatusChange = (newStatus: string) => {
+    const formData = new FormData();
+    formData.set("intent", "updateStatus");
+    formData.set("status", newStatus);
+    submit(formData, { method: "post" });
+  };
+
+  const handleDelete = () => {
+    const formData = new FormData();
+    formData.set("intent", "delete");
+    submit(formData, { method: "post" });
+    setShowDeleteDialog(false);
+    // Navigate back after delete
+    setTimeout(() => navigate("/invoices"), 500);
+  };
 
   return (
     <AuthLayout>
@@ -284,12 +203,42 @@ export default function InvoiceDetails() {
               <div>
                 <h1 className="text-xl font-bold">{invoice.folio}</h1>
                 <p className="text-sm text-muted-foreground truncate max-w-[500px]">
-                  {invoice.company}
+                  {invoice.nombreEmisor}
                 </p>
               </div>
             </div>
             <div className="flex items-center space-x-2">
-              {getStatusBadge(invoice.status)}
+              {isAdmin ? (
+                <Select
+                  value={invoice.estado}
+                  onValueChange={handleStatusChange}
+                >
+                  <SelectTrigger className="w-[150px]">
+                    <Badge variant={getStatusBadgeVariant(invoice.estado)}>
+                      {getStatusLabel(invoice.estado)}
+                    </Badge>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pendiente">Pendiente</SelectItem>
+                    <SelectItem value="recibido">Recibido</SelectItem>
+                    <SelectItem value="pagado">Pagado</SelectItem>
+                    <SelectItem value="completado">Completado</SelectItem>
+                    <SelectItem value="rechazado">Rechazado</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Badge variant={getStatusBadgeVariant(invoice.estado)}>
+                  {getStatusLabel(invoice.estado)}
+                </Badge>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => revalidator.revalidate()}
+                disabled={revalidator.state === "loading"}
+              >
+                <RefreshCw className={`h-4 w-4 ${revalidator.state === "loading" ? "animate-spin" : ""}`} />
+              </Button>
             </div>
           </div>
         </div>
@@ -301,205 +250,201 @@ export default function InvoiceDetails() {
               <div>
                 <span className="text-muted-foreground text-sm">Total</span>
                 <div className="font-semibold">
-                  ${parseFloat(invoice.total).toLocaleString()}{" "}
-                  {invoice.currency}
+                  ${invoice.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })} {invoice.moneda}
                 </div>
               </div>
               <div>
-                <span className="text-muted-foreground text-sm">Fecha</span>
+                <span className="text-muted-foreground text-sm">Subtotal</span>
                 <div className="font-medium">
-                  {new Date(invoice.invoiceDate).toLocaleDateString()}
+                  ${invoice.subtotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                 </div>
               </div>
               <div>
-                <span className="text-muted-foreground text-sm">Balance</span>
+                <span className="text-muted-foreground text-sm">Fecha Emisión</span>
                 <div className="font-medium">
-                  ${invoice.balance.toLocaleString()}
+                  {new Date(invoice.fechaEmision).toLocaleDateString("es-MX")}
                 </div>
               </div>
               <div>
-                <span className="text-muted-foreground text-sm">
-                  Método de Pago
-                </span>
-                <div className="font-medium">{invoice.paymentMethod}</div>
+                <span className="text-muted-foreground text-sm">Fecha Entrada</span>
+                <div className="font-medium">
+                  {new Date(invoice.fechaEntrada).toLocaleDateString("es-MX")}
+                </div>
               </div>
               <div>
-                <span className="text-muted-foreground text-sm">CFDI</span>
-                <div className="font-medium">{invoice.useCfdi}</div>
+                <span className="text-muted-foreground text-sm">RFC Emisor</span>
+                <div className="font-medium">{invoice.rfcEmisor}</div>
               </div>
               <div>
-                <span className="text-muted-foreground text-sm">
-                  Condiciones
-                </span>
-                <div className="font-medium">{invoice.paymentConditions}</div>
+                <span className="text-muted-foreground text-sm">RFC Receptor</span>
+                <div className="font-medium">{invoice.rfcReceptor}</div>
               </div>
             </div>
           </div>
         </div>
 
+        {/* UUID Section */}
+        <div className="px-6 py-3 bg-muted/10 border-b">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-muted-foreground text-sm">UUID:</span>
+              <span className="ml-2 font-mono text-sm">{invoice.uuid}</span>
+            </div>
+            {invoice.tipoCambio && invoice.tipoCambio !== 1 && (
+              <div>
+                <span className="text-muted-foreground text-sm">Tipo de Cambio:</span>
+                <span className="ml-2 font-medium">{invoice.tipoCambio}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Main Content Area */}
-        <div className="flex-1 min-h-0">
-          <div className="px-6 py-6 h-full">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
-              {/* Documents Section */}
+        <div className="flex-1 min-h-0 overflow-auto">
+          <div className="px-6 py-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Detalles/Conceptos Section */}
               <div className="lg:col-span-2">
-                <Card className="h-full flex flex-col">
+                <Card>
                   <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center justify-between">
-                      <span>Documentos Relacionados</span>
-                      <Button variant="outline" size="sm">
-                        <Upload className="h-4 w-4 mr-2" />
-                        Subir Documento
-                      </Button>
+                    <CardTitle className="flex items-center">
+                      <FileText className="mr-2 h-4 w-4" />
+                      Conceptos de la Factura
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="flex-1 min-h-0">
-                    <div className="h-full overflow-y-auto space-y-3">
-                      {invoice.relatedDocuments &&
-                      invoice.relatedDocuments.length > 0 ? (
-                        invoice.relatedDocuments.map((doc, index) => (
-                          <div
-                            key={index}
-                            className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors"
-                          >
-                            <div className="flex items-center space-x-3 flex-1 min-w-0">
-                              <div className="flex-shrink-0">
-                                {getDocumentIcon(doc.type)}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium truncate">
-                                  {doc.name}
-                                </div>
-                                <div className="text-sm text-muted-foreground">
-                                  {getDocumentTypeName(doc.type)} •{" "}
-                                  {new Date(
-                                    doc.uploadDate
-                                  ).toLocaleDateString()}
-                                </div>
-                              </div>
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setSelectedDocument(doc)}
-                            >
-                              <Eye className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="flex items-center justify-center h-32 text-muted-foreground">
-                          <div className="text-center">
-                            <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                            <p>No hay documentos relacionados</p>
-                          </div>
+                  <CardContent>
+                    {invoice.detalles && invoice.detalles.length > 0 ? (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Descripción</TableHead>
+                            <TableHead>Unidad</TableHead>
+                            <TableHead className="text-right">Cantidad</TableHead>
+                            <TableHead className="text-right">P. Unitario</TableHead>
+                            <TableHead className="text-right">Importe</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {invoice.detalles.map((detalle, index) => (
+                            <TableRow key={index}>
+                              <TableCell>{detalle.descripcion}</TableCell>
+                              <TableCell>{detalle.unidad}</TableCell>
+                              <TableCell className="text-right">{detalle.cantidad}</TableCell>
+                              <TableCell className="text-right">
+                                ${detalle.precioUnitario.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                ${detalle.importe.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    ) : (
+                      <div className="flex items-center justify-center h-32 text-muted-foreground">
+                        <div className="text-center">
+                          <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                          <p>No hay conceptos disponibles</p>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
+
+                {/* Emisor/Receptor Info */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Emisor</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="font-medium">{invoice.nombreEmisor}</p>
+                      <p className="text-sm text-muted-foreground">{invoice.rfcEmisor}</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Receptor</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="font-medium">{invoice.nombreReceptor}</p>
+                      <p className="text-sm text-muted-foreground">{invoice.rfcReceptor}</p>
+                    </CardContent>
+                  </Card>
+                </div>
               </div>
 
               {/* Actions Section */}
               <div>
-                <Card className="h-full flex flex-col">
+                <Card>
                   <CardHeader className="pb-3">
                     <CardTitle>Acciones</CardTitle>
                   </CardHeader>
-                  <CardContent className="flex-1 space-y-4">
-                    {/* Upload Actions */}
-                    <div>
-                      <h4 className="font-medium mb-3 text-muted-foreground">
-                        Subir Documentos
-                      </h4>
-                      <div className="space-y-3">
-                        <Select>
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Seleccionar tipo de documento" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="payment">
-                              Comprobante de Pago
-                            </SelectItem>
-                            <SelectItem value="order">
-                              Orden de Compra
-                            </SelectItem>
-                            <SelectItem value="receipt">Recibo</SelectItem>
-                            <SelectItem value="contract">Contrato</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          variant="outline"
-                          className="w-full justify-start"
-                        >
-                          <Upload className="h-4 w-4 mr-2" />
-                          Subir Documento
-                        </Button>
-                      </div>
-                    </div>
-
+                  <CardContent className="space-y-4">
                     {/* Download Actions */}
                     <div>
                       <h4 className="font-medium mb-3 text-muted-foreground">
                         Descargas
                       </h4>
                       <div className="space-y-2">
-                        {invoice.urlPdfFile && invoice.urlPdfFile !== "#" && (
-                          <Button
-                            variant="default"
-                            className="w-full justify-start"
-                          >
-                            <Download className="h-4 w-4 mr-2" />
-                            Descargar PDF
-                          </Button>
-                        )}
-                        {invoice.urlXmlFile && invoice.urlXmlFile !== "#" && (
-                          <Button
-                            variant="default"
-                            className="w-full justify-start"
-                          >
-                            <Download className="h-4 w-4 mr-2" />
-                            Descargar XML
-                          </Button>
-                        )}
-                        {invoice.relatedDocuments &&
-                          invoice.relatedDocuments.length > 0 && (
+                        {invoice.pdfUrl && (
+                          <>
                             <Button
-                              variant="secondary"
+                              variant="outline"
                               className="w-full justify-start"
+                              onClick={() => setPdfViewerOpen(true)}
                             >
-                              <Download className="h-4 w-4 mr-2" />
-                              Descargar documentos (
-                              {invoice.relatedDocuments.length})
+                              <Eye className="h-4 w-4 mr-2" />
+                              Ver PDF
                             </Button>
-                          )}
+                            <Button
+                              variant="default"
+                              className="w-full justify-start"
+                              asChild
+                            >
+                              <a href={invoice.pdfUrl} target="_blank" rel="noopener noreferrer" download>
+                                <Download className="h-4 w-4 mr-2" />
+                                Descargar PDF
+                              </a>
+                            </Button>
+                          </>
+                        )}
+                        {invoice.xmlUrl && (
+                          <Button
+                            variant="secondary"
+                            className="w-full justify-start"
+                            asChild
+                          >
+                            <a href={invoice.xmlUrl} target="_blank" rel="noopener noreferrer" download>
+                              <Download className="h-4 w-4 mr-2" />
+                              Descargar XML
+                            </a>
+                          </Button>
+                        )}
+                        {!invoice.pdfUrl && !invoice.xmlUrl && (
+                          <p className="text-sm text-muted-foreground text-center py-4">
+                            No hay archivos disponibles
+                          </p>
+                        )}
                       </div>
                     </div>
 
-                    {/* View Actions */}
-                    <div>
-                      <h4 className="font-medium mb-3 text-muted-foreground">
-                        Ver Archivos
-                      </h4>
-                      <div className="space-y-2">
-                        {invoice.urlPdfFile && invoice.urlPdfFile !== "#" && (
-                          <Button
-                            variant="outline"
-                            className="w-full justify-start"
-                            onClick={() =>
-                              setSelectedDocument({
-                                url: invoice.urlPdfFile,
-                                mimeType: "application/pdf",
-                                name: "Factura PDF",
-                              })
-                            }
-                          >
-                            <Eye className="h-4 w-4 mr-2" />
-                            Ver PDF de Factura
-                          </Button>
-                        )}
+                    {/* Admin Actions */}
+                    {isAdmin && (
+                      <div>
+                        <h4 className="font-medium mb-3 text-muted-foreground">
+                          Administración
+                        </h4>
+                        <Button
+                          variant="destructive"
+                          className="w-full justify-start"
+                          onClick={() => setShowDeleteDialog(true)}
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Eliminar Factura
+                        </Button>
                       </div>
-                    </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -507,56 +452,42 @@ export default function InvoiceDetails() {
           </div>
         </div>
 
-        {/* Document Viewer Dialog */}
-        <Dialog
-          open={!!selectedDocument}
-          onOpenChange={() => setSelectedDocument(null)}
-        >
+        {/* PDF Viewer Dialog */}
+        <Dialog open={pdfViewerOpen} onOpenChange={setPdfViewerOpen}>
           <DialogContent className="max-w-5xl max-h-[95vh] overflow-hidden">
             <DialogHeader>
-              <DialogTitle>{selectedDocument?.name}</DialogTitle>
+              <DialogTitle>Vista de PDF - {invoice.folio}</DialogTitle>
             </DialogHeader>
-
-            {selectedDocument && (
-              <div className="flex-1 overflow-hidden">
-                {selectedDocument.mimeType.startsWith("image/") ? (
-                  <div className="flex justify-center bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
-                    <img
-                      src={selectedDocument.url}
-                      alt={selectedDocument.name}
-                      className="max-w-full max-h-[70vh] object-contain"
-                    />
-                  </div>
-                ) : selectedDocument.mimeType === "application/pdf" ? (
-                  <div className="h-[70vh] w-full">
-                    <iframe
-                      src={selectedDocument.url}
-                      className="w-full h-full border-0 rounded-lg"
-                      title={selectedDocument.name}
-                    />
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-[70vh] bg-gray-50 dark:bg-gray-900 rounded-lg">
-                    <div className="text-center">
-                      <FileText className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
-                      <p className="text-muted-foreground">
-                        No se puede previsualizar este tipo de archivo
-                      </p>
-                      <Button className="mt-4" asChild>
-                        <a
-                          href={selectedDocument.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <Download className="h-4 w-4 mr-1" />
-                          Descargar archivo
-                        </a>
-                      </Button>
-                    </div>
-                  </div>
-                )}
+            {invoice.pdfUrl && (
+              <div className="h-[70vh] w-full">
+                <iframe
+                  src={invoice.pdfUrl}
+                  className="w-full h-full border-0 rounded-lg"
+                  title={`PDF de ${invoice.folio}`}
+                />
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Confirmar Eliminación</DialogTitle>
+              <DialogDescription>
+                ¿Estás seguro de que deseas eliminar la factura {invoice.folio}?
+                Esta acción no se puede deshacer.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
+                Cancelar
+              </Button>
+              <Button variant="destructive" onClick={handleDelete}>
+                Eliminar
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

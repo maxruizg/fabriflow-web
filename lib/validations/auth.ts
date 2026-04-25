@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-// RFC validation regex (Mexican tax ID)
-const rfcRegex = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/;
+// RFC validation regex (Mexican tax ID) - case insensitive
+const rfcRegex = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i;
 
 // Phone validation regex (Mexican format)
 const phoneRegex = /^[\d\s()-]+$/;
@@ -11,18 +11,18 @@ const baseRegisterSchema = z.object({
     .enum(["company", "provider"], {
       errorMap: () => ({ message: "Por favor selecciona un tipo de registro" }),
     }),
-  
+
   providerType: z
     .enum(["legal", "personal"], {
       errorMap: () => ({ message: "Por favor selecciona el tipo de proveedor" }),
     })
     .optional(),
-  
+
   company: z
     .string()
-    .min(3, "El nombre de la empresa debe tener al menos 3 caracteres")
+    .min(1, "Selecciona o ingresa una empresa")
     .max(100, "El nombre de la empresa no puede exceder 100 caracteres"),
-  
+
   providerCompany: z
     .string()
     .optional()
@@ -32,7 +32,7 @@ const baseRegisterSchema = z.object({
     .refine((val) => !val || val.length <= 100, {
       message: "El nombre de tu empresa no puede exceder 100 caracteres",
     }),
-  
+
   vendorLegalName: z
     .string()
     .optional()
@@ -42,34 +42,34 @@ const baseRegisterSchema = z.object({
     .refine((val) => !val || val.length <= 100, {
       message: "El nombre legal no puede exceder 100 caracteres",
     }),
-  
-  
+
+
   rfc: z
     .string()
     .min(12, "El RFC debe tener al menos 12 caracteres")
     .max(13, "El RFC no puede exceder 13 caracteres")
     .regex(rfcRegex, "Formato de RFC inválido (ej: ABC123456XYZ)"),
-  
+
   phone: z
     .string()
     .min(10, "El teléfono debe tener al menos 10 dígitos")
     .regex(phoneRegex, "Formato de teléfono inválido"),
-  
+
   name: z
     .string()
-    .min(2, "El nombre debe tener al menos 2 caracteres")
-    .max(50, "El nombre no puede exceder 50 caracteres"),
-  
+    .transform((val) => val?.trim() || undefined)
+    .optional(),
+
   lastname: z
     .string()
-    .min(2, "El apellido debe tener al menos 2 caracteres")
-    .max(50, "El apellido no puede exceder 50 caracteres"),
-  
+    .transform((val) => val?.trim() || undefined)
+    .optional(),
+
   email: z
     .string()
     .email("Correo electrónico inválido")
     .max(100, "El correo no puede exceder 100 caracteres"),
-  
+
   companyEmail: z
     .string()
     .optional()
@@ -79,27 +79,15 @@ const baseRegisterSchema = z.object({
     .refine((val) => !val || val.length <= 100, {
       message: "El correo de la empresa no puede exceder 100 caracteres",
     }),
-  
+
   password: z
     .string()
-    .min(6, "La contraseña debe tener al menos 6 caracteres")
-    .max(100, "La contraseña no puede exceder 100 caracteres")
-    .regex(
-      /[A-Z]/,
-      "La contraseña debe contener al menos una letra mayúscula"
-    )
-    .regex(
-      /[a-z]/,
-      "La contraseña debe contener al menos una letra minúscula"
-    )
-    .regex(
-      /[0-9]/,
-      "La contraseña debe contener al menos un número"
-    ),
-  
+    .min(8, "La contraseña debe tener al menos 8 caracteres")
+    .max(100, "La contraseña no puede exceder 100 caracteres"),
+
   confirmPassword: z
     .string()
-    .min(6, "La contraseña debe tener al menos 6 caracteres"),
+    .min(8, "La contraseña debe tener al menos 8 caracteres"),
 });
 
 export const registerSchema = baseRegisterSchema
@@ -137,6 +125,26 @@ export const registerSchema = baseRegisterSchema
     path: ["vendorLegalName"],
   })
   .refine((data) => {
+    // name and lastname are required for companies and legal providers, NOT for personal providers
+    if (data.companyType === "company" || (data.companyType === "provider" && data.providerType === "legal")) {
+      return data.name && data.name.length >= 2;
+    }
+    return true;
+  }, {
+    message: "El nombre es requerido",
+    path: ["name"],
+  })
+  .refine((data) => {
+    // name and lastname are required for companies and legal providers, NOT for personal providers
+    if (data.companyType === "company" || (data.companyType === "provider" && data.providerType === "legal")) {
+      return data.lastname && data.lastname.length >= 2;
+    }
+    return true;
+  }, {
+    message: "El apellido es requerido",
+    path: ["lastname"],
+  })
+  .refine((data) => {
     if (data.companyType === "company") {
       return data.companyEmail && data.companyEmail.includes("@");
     }
@@ -146,15 +154,13 @@ export const registerSchema = baseRegisterSchema
     path: ["companyEmail"],
   });
 
+// Login schema - company no longer required (multi-company flow)
 export const loginSchema = z.object({
-  company: z
-    .string()
-    .min(1, "Por favor selecciona una empresa"),
-  
   email: z
     .string()
-    .min(1, "RFC o Email es requerido"),
-  
+    .email("Correo electrónico inválido")
+    .min(1, "El email es requerido"),
+
   password: z
     .string()
     .min(1, "La contraseña es requerida"),

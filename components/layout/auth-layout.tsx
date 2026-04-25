@@ -27,11 +27,13 @@ interface AuthLayoutProps {
   children: React.ReactNode;
 }
 
+// Navegación con permisos requeridos (cualquiera de los listados)
+// Nota: "Proveedores" solo visible para admins (vendors:read o vendors:manage)
 const navigation = [
-  { name: "Panel de Control", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Facturas", href: "/invoices", icon: FileText },
-  { name: "Proveedores", href: "/providers", icon: Users },
-  { name: "Reportes", href: "/reports", icon: BarChart3 },
+  { name: "Panel de Control", href: "/dashboard", icon: LayoutDashboard, permissions: ["dashboard:read"] },
+  { name: "Facturas", href: "/invoices", icon: FileText, permissions: ["invoices:read", "invoices:manage"] },
+  { name: "Proveedores", href: "/providers", icon: Users, permissions: ["vendors:read", "vendors:manage"] },
+  { name: "Reportes", href: "/reports", icon: BarChart3, permissions: ["reports:read", "reports:export"] },
 ];
 
 export function AuthLayout({ children }: AuthLayoutProps) {
@@ -40,6 +42,18 @@ export function AuthLayout({ children }: AuthLayoutProps) {
   const { user } = useUser();
 
   const isCurrentPath = (path: string) => location.pathname === path;
+
+  // Verificar si el usuario tiene alguno de los permisos requeridos
+  const hasAnyPermission = (requiredPermissions: string[]) => {
+    if (!user?.permissions) return false;
+    // Super Admin tiene acceso a todo
+    if (user.permissions.includes("*")) return true;
+    // Verificar si tiene al menos uno de los permisos requeridos
+    return requiredPermissions.some(perm => user.permissions.includes(perm));
+  };
+
+  // Filtrar navegación según permisos
+  const filteredNavigation = navigation.filter(item => hasAnyPermission(item.permissions));
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -124,7 +138,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
             className="flex-1 px-4 py-4 space-y-1 relative"
             aria-label="Main navigation menu"
           >
-            {navigation.map((item) => {
+            {filteredNavigation.map((item) => {
               const Icon = item.icon;
               const current = isCurrentPath(item.href);
 
@@ -155,34 +169,37 @@ export function AuthLayout({ children }: AuthLayoutProps) {
               );
             })}
             
-            {/* Separator */}
-            <div className="py-2">
-              <Separator />
-            </div>
-            
-            {/* Users Button */}
-            <a
-              href="/users"
-              className={`
-                group flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors duration-200 cursor-pointer
-                ${
-                  isCurrentPath("/users")
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                }
-              `}
-              onClick={() => setSidebarOpen(false)}
-              aria-current={isCurrentPath("/users") ? "page" : undefined}
-            >
-              <Users
-                className={`mr-3 h-5 w-5 ${
-                  isCurrentPath("/users")
-                    ? "text-primary-foreground"
-                    : "text-muted-foreground group-hover:text-accent-foreground"
-                }`}
-              />
-              Usuarios
-            </a>
+            {/* Separator y Users Button - Solo para Super Admin */}
+            {user?.permissions?.includes("*") && (
+              <>
+                <div className="py-2">
+                  <Separator />
+                </div>
+
+                <a
+                  href="/users"
+                  className={`
+                    group flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors duration-200 cursor-pointer
+                    ${
+                      isCurrentPath("/users")
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    }
+                  `}
+                  onClick={() => setSidebarOpen(false)}
+                  aria-current={isCurrentPath("/users") ? "page" : undefined}
+                >
+                  <Users
+                    className={`mr-3 h-5 w-5 ${
+                      isCurrentPath("/users")
+                        ? "text-primary-foreground"
+                        : "text-muted-foreground group-hover:text-accent-foreground"
+                    }`}
+                  />
+                  Usuarios
+                </a>
+              </>
+            )}
           </nav>
 
           {/* Logout */}
@@ -218,8 +235,8 @@ export function AuthLayout({ children }: AuthLayoutProps) {
 
             <div className="flex-1 lg:flex lg:items-center lg:justify-between">
               <h1 className="text-2xl font-semibold text-foreground ml-4 lg:ml-0">
-                {navigation.find((item) => isCurrentPath(item.href))?.name ||
-                  "Panel de Control"}
+                {filteredNavigation.find((item) => isCurrentPath(item.href))?.name ||
+                  (isCurrentPath("/users") ? "Usuarios" : "Panel de Control")}
               </h1>
 
               <div className="hidden lg:flex lg:items-center lg:space-x-4">

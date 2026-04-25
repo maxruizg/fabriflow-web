@@ -303,3 +303,122 @@ export interface MultiPayment {
   entryDate: string;
   idPdf: string;
 }
+
+// ============================================================================
+// Backend Invoice Types (from Rust API)
+// ============================================================================
+
+/** Estado de factura del backend */
+export type InvoiceStatus = 'pendiente' | 'recibido' | 'pagado' | 'completado' | 'rechazado';
+
+/** Detalle/concepto de factura del backend */
+export interface InvoiceDetailBackend {
+  descripcion: string;
+  unidad: string;
+  cantidad: number;
+  precioUnitario: number;
+  importe: number;
+}
+
+/** Factura del backend (Rust API) */
+export interface InvoiceBackend {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  company: string;
+  vendor?: string;
+  folio: string;
+  uuid: string;
+  fechaEmision: string;
+  fechaEntrada: string;
+  rfcEmisor: string;
+  nombreEmisor: string;
+  rfcReceptor: string;
+  nombreReceptor: string;
+  subtotal: number;
+  total: number;
+  moneda: string;
+  tipoCambio?: number;
+  estado: InvoiceStatus;
+  detalles: InvoiceDetailBackend[];
+  pdfUrl?: string;
+  xmlUrl?: string;
+  ordenCompraUrl?: string;
+  deleted: boolean;
+  deletedAt?: string;
+}
+
+/** Respuesta paginada con cursor del backend */
+export interface CursorPaginatedResponse<T> {
+  data: T[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  count: number;
+}
+
+/** Filtros de facturas */
+export interface InvoiceFiltersBackend {
+  folio?: string;
+  uuid?: string;
+  estado?: string;
+  fechaEmisionDesde?: string;
+  fechaEmisionHasta?: string;
+  fechaEntradaDesde?: string;
+  fechaEntradaHasta?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** Request para crear factura */
+export interface CreateInvoiceRequest {
+  folio: string;
+  uuid: string;
+  fechaEmision: string;
+  rfcEmisor: string;
+  nombreEmisor: string;
+  rfcReceptor: string;
+  nombreReceptor: string;
+  subtotal: number;
+  total: number;
+  moneda: string;
+  tipoCambio?: number;
+  detalles: InvoiceDetailBackend[];
+  pdfUrl?: string;
+  xmlUrl?: string;
+  ordenCompraUrl?: string;
+}
+
+/** Respuesta de creación de factura */
+export interface CreateInvoiceResponse {
+  message: string;
+  invoice: InvoiceBackend;
+}
+
+/** Request para cambiar estado */
+export interface UpdateStatusRequest {
+  estado: InvoiceStatus;
+}
+
+/** Respuesta de URLs */
+export interface InvoiceUrlsResponse {
+  pdfUrl?: string;
+  xmlUrl?: string;
+  ordenCompraUrl?: string;
+}
+
+/** Respuesta de subida de archivo */
+export interface UploadResponse {
+  url: string;
+  key: string;
+  size: number;
+  fileType: string;
+}
+
+/** Respuesta de subida de orden de compra */
+export interface PurchaseOrderUploadResponse {
+  url: string;
+  key: string;
+  size: number;
+  valid: boolean;
+  message: string;
+}

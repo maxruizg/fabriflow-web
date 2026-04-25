@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { MetaFunction, LoaderFunctionArgs } from "@remix-run/cloudflare";
 import { useLoaderData, useRevalidator } from "@remix-run/react";
 import { json } from "@remix-run/cloudflare";
-import { requireUser } from "~/lib/session.server";
+import { requireUser, getAccessTokenFromSession, getFullSession } from "~/lib/session.server";
+import { fetchInvoices, fetchAllInvoices } from "~/lib/api.server";
 import { AuthLayout } from "~/components/layout/auth-layout";
 import {
   Card,
@@ -17,12 +18,23 @@ import {
   Users,
   Banknote,
   CreditCard,
+  Upload,
+  Receipt,
+  FileCheck,
+  FileMinus,
+  FilePlus,
+  BarChart3,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Truck,
+  CircleDot,
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { DataLoadError } from "~/components/ui/error-state";
 import { DashboardLoadingSkeleton } from "~/components/ui/loading-state";
 import { MultiPaymentDialog } from "~/components/dashboard/multi-payment-dialog";
-import type { Invoice } from "~/types";
+import type { Invoice, InvoiceBackend } from "~/types";
 
 export const meta: MetaFunction = () => {
   return [
@@ -34,181 +46,183 @@ export const meta: MetaFunction = () => {
   ];
 };
 
+// Helper function to check if user has a specific permission
+function hasPermission(permissions: string[] | undefined, permission: string): boolean {
+  if (!permissions) return false;
+  if (permissions.includes("*")) return true; // Full access
+  return permissions.includes(permission);
+}
+
+// Helper function to detect role type
+function getRoleType(role: string | undefined): "super_admin" | "admin" | "proveedor" | "unknown" {
+  const roleLower = (role || "").toLowerCase().trim();
+  if (roleLower === "super admin" || roleLower === "superadmin") return "super_admin";
+  if (roleLower.includes("admin") || roleLower.includes("administrador")) return "admin";
+  if (roleLower.includes("proveedor") || roleLower.includes("vendor")) return "proveedor";
+  return "unknown";
+}
+
+// Vendor metrics interface
+interface VendorMetrics {
+  totalInvoices: number;
+  totalMXN: number;
+  totalUSD: number;
+  pendiente: number;
+  recibido: number;
+  pagado: number;
+  completado: number;
+  rechazado: number;
+  ultimaFactura: string | null;
+}
+
+// Calculate vendor metrics from invoices
+function calculateVendorMetrics(invoices: InvoiceBackend[]): VendorMetrics {
+  const metrics: VendorMetrics = {
+    totalInvoices: invoices.length,
+    totalMXN: 0,
+    totalUSD: 0,
+    pendiente: 0,
+    recibido: 0,
+    pagado: 0,
+    completado: 0,
+    rechazado: 0,
+    ultimaFactura: null,
+  };
+
+  let latestDate: Date | null = null;
+
+  for (const invoice of invoices) {
+    // Sum by currency
+    if (invoice.moneda === "MXN") {
+      metrics.totalMXN += invoice.total;
+    } else if (invoice.moneda === "USD") {
+      metrics.totalUSD += invoice.total;
+    }
+
+    // Count by status
+    const estado = invoice.estado?.toLowerCase() || "pendiente";
+    if (estado === "pendiente") metrics.pendiente++;
+    else if (estado === "recibido") metrics.recibido++;
+    else if (estado === "pagado") metrics.pagado++;
+    else if (estado === "completado") metrics.completado++;
+    else if (estado === "rechazado") metrics.rechazado++;
+
+    // Track latest invoice
+    const invoiceDate = new Date(invoice.fechaEntrada || invoice.createdAt);
+    if (!latestDate || invoiceDate > latestDate) {
+      latestDate = invoiceDate;
+      metrics.ultimaFactura = invoice.fechaEntrada || invoice.createdAt;
+    }
+  }
+
+  return metrics;
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   // Require authentication for dashboard access
-  await requireUser(request);
+  const user = await requireUser(request);
+  const session = await getFullSession(request);
+  const token = session?.accessToken;
+  const companyId = user.company;
 
   try {
+    const roleType = getRoleType(user.role);
+    const permissions = user.permissions || [];
+    const isProveedor = roleType === "proveedor";
 
-    const metrics = {
-      totalRevenue: 125430.5,
-      totalInvoices: 47,
-      activeProviders: 12,
-      balanceUSD: 24500.75,
-      balanceMXN: 487250.0,
-      recentActivity: [
-        {
-          description: "Factura #INV-2024-001 pagada",
-          amount: 2500.0,
-          time: "hace 2 horas",
-        },
-        {
-          description: "Nuevo proveedor registrado: ABC Corp",
-          amount: 0,
-          time: "hace 5 horas",
-        },
-        {
-          description: "Factura #INV-2024-002 creada",
-          amount: 3750.5,
-          time: "hace 1 día",
-        },
-        {
-          description: "Pago recibido de XYZ Ltd",
-          amount: 1200.0,
-          time: "hace 2 días",
-        },
-        {
-          description: "Reporte mensual generado",
-          amount: 0,
-          time: "hace 3 días",
-        },
-      ],
+    // Default metrics
+    let vendorMetrics: VendorMetrics | null = null;
+    let adminMetrics = {
+      totalRevenue: 0,
+      totalInvoices: 0,
+      activeProviders: 0,
+      balanceUSD: 0,
+      balanceMXN: 0,
+      recentActivity: [] as { description: string; amount: number; time: string }[],
     };
 
-    return json({ metrics, error: null, user: null });
+    // Fetch invoices for vendor dashboard
+    if (isProveedor && token && companyId) {
+      try {
+        const response = await fetchInvoices(token, companyId, { limit: 100 });
+        vendorMetrics = calculateVendorMetrics(response.data || []);
+      } catch (error) {
+        console.error("Error fetching vendor invoices:", error);
+        vendorMetrics = {
+          totalInvoices: 0,
+          totalMXN: 0,
+          totalUSD: 0,
+          pendiente: 0,
+          recibido: 0,
+          pagado: 0,
+          completado: 0,
+          rechazado: 0,
+          ultimaFactura: null,
+        };
+      }
+    }
+
+    // Fetch all invoices for admin dashboard
+    if (!isProveedor && token && companyId) {
+      try {
+        const response = await fetchAllInvoices(token, companyId, { limit: 100 });
+        const invoices = response.data || [];
+
+        // Calculate admin metrics
+        for (const invoice of invoices) {
+          if (invoice.moneda === "MXN") {
+            adminMetrics.balanceMXN += invoice.total;
+            adminMetrics.totalRevenue += invoice.total;
+          } else if (invoice.moneda === "USD") {
+            adminMetrics.balanceUSD += invoice.total;
+            adminMetrics.totalRevenue += invoice.total;
+          }
+        }
+        adminMetrics.totalInvoices = invoices.length;
+
+        // Count unique vendors
+        const uniqueVendors = new Set(invoices.map(i => i.vendor).filter(Boolean));
+        adminMetrics.activeProviders = uniqueVendors.size;
+      } catch (error) {
+        console.error("Error fetching admin invoices:", error);
+      }
+    }
+
+    return json({
+      metrics: adminMetrics,
+      vendorMetrics,
+      error: null,
+      user,
+      roleType,
+      permissions,
+    });
   } catch (error) {
     console.error("Dashboard loader error:", error);
     return json({
       metrics: null,
+      vendorMetrics: null,
       error:
         "Error al cargar los datos del dashboard. Por favor intente más tarde.",
-      user: null,
+      user,
+      roleType: "unknown" as const,
+      permissions: [] as string[],
     });
   }
 }
 
 export default function Dashboard() {
-  const { metrics, error } = useLoaderData<typeof loader>();
+  const { metrics, vendorMetrics, error, roleType, permissions } = useLoaderData<typeof loader>();
   const revalidator = useRevalidator();
   const [isMultiPaymentOpen, setIsMultiPaymentOpen] = useState<boolean>(false);
 
-  // Hardcoded invoices for development
-  const invoices = [
-    {
-      uuid: "INV-001",
-      folio: "A-2024-001",
-      company: "Textiles del Norte S.A. de C.V.",
-      issuerName: "Proveedor de Algodón Industrial",
-      invoiceDate: "2024-01-15",
-      total: "25500.00",
-      currency: "MXN",
-      status: "paid",
-      urlPdfFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      urlXmlFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      paymentConditions: "30 días",
-      details: [],
-      entryDate: "2024-01-15",
-      paymentMethod: "Transferencia",
-      subtotal: "25000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 0,
-      exchangeRate: "1",
-      complements: [],
-    },
-    {
-      uuid: "INV-002",
-      folio: "A-2024-002",
-      company: "Manufacturera Industrial Mexicana",
-      issuerName: "Aceros y Metales S.A.",
-      invoiceDate: "2024-01-20",
-      total: "150750.50",
-      currency: "MXN",
-      status: "pending",
-      urlPdfFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      urlXmlFile:
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-      paymentConditions: "15 días",
-      details: [],
-      entryDate: "2024-01-20",
-      paymentMethod: "Transferencia",
-      subtotal: "150000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 150750.5,
-      exchangeRate: "1",
-      complements: [],
-    },
-    {
-      uuid: "INV-003",
-      folio: "B-2024-015",
-      company: "Fábrica de Componentes Automotrices",
-      issuerName: "Plásticos Industriales del Bajío",
-      invoiceDate: "2024-02-01",
-      total: "89300.00",
-      currency: "MXN",
-      status: "pending",
-      urlPdfFile: "#",
-      urlXmlFile: "#",
-      paymentConditions: "30 días",
-      details: [],
-      entryDate: "2024-02-01",
-      paymentMethod: "Cheque",
-      subtotal: "89000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 89300.0,
-      exchangeRate: "1",
-      complements: [],
-    },
-    {
-      uuid: "INV-004",
-      folio: "C-2024-008",
-      company: "Industrias Metálicas del Bajío",
-      issuerName: "Químicos y Pinturas Especiales",
-      invoiceDate: "2024-02-10",
-      total: "45600.00",
-      currency: "MXN",
-      status: "pending",
-      urlPdfFile: "#",
-      urlXmlFile: "",
-      paymentConditions: "60 días",
-      details: [],
-      entryDate: "2024-02-10",
-      paymentMethod: "Transferencia",
-      subtotal: "45000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 45600.0,
-      exchangeRate: "1",
-      complements: [],
-    },
-    {
-      uuid: "INV-005",
-      folio: "A-2024-003",
-      company: "Procesadora de Alimentos San Juan",
-      issuerName: "Empacadora Nacional S.A.",
-      invoiceDate: "2024-02-15",
-      total: "320000.00",
-      currency: "MXN",
-      status: "pending",
-      urlPdfFile: "#",
-      urlXmlFile: "#",
-      paymentConditions: "Contado",
-      details: [],
-      entryDate: "2024-02-15",
-      paymentMethod: "Efectivo",
-      subtotal: "315000.00",
-      user: "user1",
-      useCfdi: "G03",
-      balance: 320000.0,
-      exchangeRate: "1",
-      complements: [],
-    },
-  ];
+  // Empty invoices for now - will be loaded from API
+  const invoices: Invoice[] = [];
+
+  // Permission checks
+  const can = (permission: string) => hasPermission(permissions, permission);
+  const isSuperAdmin = roleType === "super_admin";
+  const isAdmin = roleType === "admin";
+  const isProveedor = roleType === "proveedor";
 
   if (error) {
     return (
@@ -221,7 +235,7 @@ export default function Dashboard() {
     );
   }
 
-  if (!metrics) {
+  if (!metrics && !vendorMetrics) {
     return (
       <AuthLayout>
         <DashboardLoadingSkeleton />
@@ -229,6 +243,175 @@ export default function Dashboard() {
     );
   }
 
+  // Render vendor dashboard
+  if (isProveedor && vendorMetrics) {
+    return (
+      <AuthLayout>
+        <div className="space-y-6">
+          {/* Vendor Stats Cards */}
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">
+                  Total de Facturas
+                </CardTitle>
+                <FileText className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{vendorMetrics.totalInvoices}</div>
+                <p className="text-xs text-muted-foreground">
+                  Facturas enviadas
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total MXN</CardTitle>
+                <Banknote className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  ${vendorMetrics.totalMXN.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Total facturado en pesos
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total USD</CardTitle>
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  ${vendorMetrics.totalUSD.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Total facturado en dólares
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Última Factura</CardTitle>
+                <Clock className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {vendorMetrics.ultimaFactura
+                    ? new Date(vendorMetrics.ultimaFactura).toLocaleDateString("es-MX", { day: "2-digit", month: "short" })
+                    : "N/A"}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Fecha de última factura
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+            {/* Invoice Status Breakdown */}
+            <Card className="col-span-4">
+              <CardHeader>
+                <CardTitle>Estado de Facturas</CardTitle>
+                <CardDescription>
+                  Distribución por estado de tus facturas
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                  <div className="flex flex-col items-center p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+                    <Clock className="h-6 w-6 text-yellow-600 mb-2" />
+                    <span className="text-2xl font-bold text-yellow-600">{vendorMetrics.pendiente}</span>
+                    <span className="text-xs text-muted-foreground">Pendientes</span>
+                  </div>
+                  <div className="flex flex-col items-center p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                    <Truck className="h-6 w-6 text-blue-600 mb-2" />
+                    <span className="text-2xl font-bold text-blue-600">{vendorMetrics.recibido}</span>
+                    <span className="text-xs text-muted-foreground">Recibidas</span>
+                  </div>
+                  <div className="flex flex-col items-center p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
+                    <CreditCard className="h-6 w-6 text-purple-600 mb-2" />
+                    <span className="text-2xl font-bold text-purple-600">{vendorMetrics.pagado}</span>
+                    <span className="text-xs text-muted-foreground">Pagadas</span>
+                  </div>
+                  <div className="flex flex-col items-center p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                    <CheckCircle className="h-6 w-6 text-green-600 mb-2" />
+                    <span className="text-2xl font-bold text-green-600">{vendorMetrics.completado}</span>
+                    <span className="text-xs text-muted-foreground">Completadas</span>
+                  </div>
+                  <div className="flex flex-col items-center p-4 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                    <XCircle className="h-6 w-6 text-red-600 mb-2" />
+                    <span className="text-2xl font-bold text-red-600">{vendorMetrics.rechazado}</span>
+                    <span className="text-xs text-muted-foreground">Rechazadas</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Quick Actions for Vendor */}
+            <Card className="col-span-3">
+              <CardHeader>
+                <CardTitle>Acciones Rápidas</CardTitle>
+                <CardDescription>
+                  Gestiona tus documentos fiscales
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="grid gap-2">
+                  <Button
+                    className="w-full justify-start"
+                    onClick={() => { window.location.href = "/invoices/new"; }}
+                  >
+                    <Upload className="h-4 w-4 mr-2" />
+                    Subir Factura
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => { window.location.href = "/reception/new"; }}
+                  >
+                    <FileCheck className="h-4 w-4 mr-2" />
+                    Subir Recepción
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => { window.location.href = "/credit-notes/new"; }}
+                  >
+                    <FileMinus className="h-4 w-4 mr-2" />
+                    Subir Nota de Crédito
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => { window.location.href = "/complements/new"; }}
+                  >
+                    <Receipt className="h-4 w-4 mr-2" />
+                    Subir Complemento
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => { window.location.href = "/invoices"; }}
+                  >
+                    <FileText className="h-4 w-4 mr-2" />
+                    Ver Mis Facturas
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </AuthLayout>
+    );
+  }
+
+  // Render admin/super admin dashboard
   return (
     <AuthLayout>
       <div className="space-y-6">
@@ -242,7 +425,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                ${metrics.totalRevenue.toLocaleString()}
+                ${metrics?.totalRevenue.toLocaleString()}
               </div>
               <p className="text-xs text-muted-foreground">
                 Calculado de todas las facturas
@@ -258,7 +441,7 @@ export default function Dashboard() {
               <FileText className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{metrics.totalInvoices}</div>
+              <div className="text-2xl font-bold">{metrics?.totalInvoices}</div>
               <p className="text-xs text-muted-foreground">
                 Facturas activas en el sistema
               </p>
@@ -274,7 +457,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {metrics.activeProviders}
+                {metrics?.activeProviders}
               </div>
               <p className="text-xs text-muted-foreground">
                 Proveedores actualmente activos
@@ -289,7 +472,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                ${metrics.balanceUSD.toLocaleString()}
+                ${metrics?.balanceUSD.toLocaleString()}
               </div>
               <p className="text-xs text-muted-foreground">
                 Balance disponible en dólares
@@ -304,7 +487,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                ${metrics.balanceMXN.toLocaleString()} MXN
+                ${metrics?.balanceMXN.toLocaleString()} MXN
               </div>
               <p className="text-xs text-muted-foreground">
                 Balance disponible en pesos mexicanos
@@ -323,7 +506,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {metrics.recentActivity.map((activity, index) => (
+                {metrics?.recentActivity.map((activity, index) => (
                   <div key={index} className="flex items-center">
                     <div className="ml-4 space-y-1">
                       <p className="text-sm font-medium leading-none">
@@ -335,7 +518,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                 ))}
-                {metrics.recentActivity.length === 0 && (
+                {(!metrics?.recentActivity || metrics.recentActivity.length === 0) && (
                   <p className="text-sm text-muted-foreground">
                     Sin actividad reciente
                   </p>
@@ -348,58 +531,102 @@ export default function Dashboard() {
             <CardHeader>
               <CardTitle>Acciones Rápidas</CardTitle>
               <CardDescription>
-                Tareas comunes y accesos directos
+                {isSuperAdmin ? "Visión general del sistema" : "Acciones operativas"}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
               <div className="grid gap-2">
-                <Button
-                  className="w-full justify-start"
-                  onClick={() => {
-                    console.log("Subir Nueva Factura clicked");
-                    // TODO: Implement upload invoice functionality
-                  }}
-                >
-                  Subir Nueva Factura
-                </Button>
-                <Button
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={() => {
-                    console.log("Crear Pago clicked");
-                    // TODO: Implement create payment functionality
-                  }}
-                >
-                  Crear Pago
-                </Button>
-                <Button
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={() => setIsMultiPaymentOpen(true)}
-                >
-                  <CreditCard className="h-4 w-4 mr-2" />
-                  Multipago
-                </Button>
-                <Button
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={() => {
-                    console.log("Generar Reporte clicked");
-                    // TODO: Implement generate report functionality
-                  }}
-                >
-                  Generar Reporte
-                </Button>
-                <Button
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={() => {
-                    console.log("Agregar Proveedor clicked");
-                    // TODO: Implement add provider functionality
-                  }}
-                >
-                  Agregar Proveedor
-                </Button>
+                {/* === ACCIONES DE SUPER ADMIN (Dueño) === */}
+                {isSuperAdmin && (
+                  <>
+                    <Button
+                      className="w-full justify-start"
+                      onClick={() => { window.location.href = "/invoices"; }}
+                    >
+                      <FileText className="h-4 w-4 mr-2" />
+                      Ver Todas las Facturas
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => { window.location.href = "/providers"; }}
+                    >
+                      <Users className="h-4 w-4 mr-2" />
+                      Gestionar Proveedores
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => { window.location.href = "/users"; }}
+                    >
+                      <Users className="h-4 w-4 mr-2" />
+                      Gestionar Usuarios
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => { window.location.href = "/reports"; }}
+                    >
+                      <BarChart3 className="h-4 w-4 mr-2" />
+                      Ver Reportes
+                    </Button>
+                  </>
+                )}
+
+                {/* === ACCIONES DE ADMIN (Operativo) === */}
+                {isAdmin && (
+                  <>
+                    {can("invoices:read") && (
+                      <Button
+                        className="w-full justify-start"
+                        onClick={() => { window.location.href = "/invoices"; }}
+                      >
+                        <FileText className="h-4 w-4 mr-2" />
+                        Ver Facturas
+                      </Button>
+                    )}
+                    {can("payments:create") && (
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => { window.location.href = "/payments/new"; }}
+                      >
+                        <DollarSign className="h-4 w-4 mr-2" />
+                        Crear Pago
+                      </Button>
+                    )}
+                    {can("payments:create") && (
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => setIsMultiPaymentOpen(true)}
+                      >
+                        <CreditCard className="h-4 w-4 mr-2" />
+                        Multipago
+                      </Button>
+                    )}
+                    {can("vendors:manage") && (
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => { window.location.href = "/providers"; }}
+                      >
+                        <Users className="h-4 w-4 mr-2" />
+                        Gestionar Proveedores
+                      </Button>
+                    )}
+                    {can("reports:read") && (
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => { window.location.href = "/reports"; }}
+                      >
+                        <BarChart3 className="h-4 w-4 mr-2" />
+                        Ver Reportes
+                      </Button>
+                    )}
+                  </>
+                )}
               </div>
             </CardContent>
           </Card>

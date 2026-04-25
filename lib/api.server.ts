@@ -27,9 +27,8 @@ class ApiServerError extends Error {
 
 // Get API base URL with fallback
 function getApiBaseUrl(): string {
-  // Hardcode for now to ensure it works, then can be moved back to env var
-  const url = 'https://fabriflow-be.fly.dev';
-  console.log('Using hardcoded API URL:', url);
+  const url = process.env.API_BASE_URL || 'http://localhost:8080';
+  console.log('Using API URL:', url);
   return url;
 }
 
@@ -162,26 +161,44 @@ export async function apiRequest<T>(
 
 // Specific API functions
 export interface LoginRequest {
-  email: string;
+  email?: string;
+  rfc?: string; // RFC for provider login
   password: string;
-  company: string;
+  company?: string; // Now optional - multi-company support
 }
 
+// User company info for multi-company support
+export interface UserCompanyInfo {
+  id: string;
+  name: string;
+  role: string;
+  permissions: string[];
+  isDefault: boolean;
+}
+
+// User data in login response
+export interface LoginUserData {
+  id: string;
+  email: string;
+  name?: string;
+  company?: string;
+  companyName?: string;
+  role?: string;
+  permissions: string[];
+  status: string;
+  lastLogin?: string;
+  createdAt: string;
+}
+
+// New login response structure for multi-company support
 export interface LoginResponse {
   success: boolean;
   data: {
-    token: string;
-    user: {
-      id: string;
-      company: string;
-      email: string;
-      user?: string;
-      role?: string;
-      permissions?: string[];
-      status?: string;
-      last_login?: string;
-      created_at?: string;
-    };
+    token?: string;
+    refreshToken?: string;
+    user: LoginUserData;
+    companies: UserCompanyInfo[];
+    requiresCompanySelection: boolean;
   } | null;
   error: string | null;
 }
@@ -191,6 +208,86 @@ export async function loginUser(credentials: LoginRequest): Promise<LoginRespons
   return apiRequest<LoginResponse>('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify(credentials),
+  });
+}
+
+// Select company after login (when user has multiple companies)
+export interface SelectCompanyRequest {
+  companyId: string;
+}
+
+export interface SelectCompanyResponse {
+  success: boolean;
+  data: {
+    token: string;
+    refreshToken: string;
+    user: LoginUserData;
+  } | null;
+  error: string | null;
+}
+
+export async function selectCompany(companyId: string, token: string): Promise<SelectCompanyResponse> {
+  return apiRequest<SelectCompanyResponse>('/api/auth/select-company', {
+    method: 'POST',
+    body: JSON.stringify({ companyId }),
+  }, token);
+}
+
+// Switch company (for users already logged in)
+export async function switchCompany(companyId: string, token: string): Promise<SelectCompanyResponse> {
+  return apiRequest<SelectCompanyResponse>('/api/auth/switch-company', {
+    method: 'POST',
+    body: JSON.stringify({ companyId }),
+  }, token);
+}
+
+// Signup - Create user + company
+export interface SignupRequest {
+  email: string;
+  password: string;
+  name: string;
+  company: {
+    name: string;
+    rfc: string;
+    email: string;
+    phone?: string;
+  };
+}
+
+export interface SignupResponse {
+  success: boolean;
+  message: string;
+  userId: string;
+  companyId: string;
+}
+
+export async function signupUser(data: SignupRequest): Promise<SignupResponse> {
+  return apiRequest<SignupResponse>('/api/auth/signup', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Join existing company
+export interface JoinRequest {
+  email: string;
+  password: string;
+  name: string;
+  companyId: string;
+  vendorRfc?: string;
+  inviteCode?: string;
+}
+
+export interface JoinResponse {
+  success: boolean;
+  message: string;
+  userId: string;
+}
+
+export async function joinCompany(data: JoinRequest): Promise<JoinResponse> {
+  return apiRequest<JoinResponse>('/api/auth/join', {
+    method: 'POST',
+    body: JSON.stringify(data),
   });
 }
 
@@ -207,28 +304,347 @@ export interface User {
 }
 
 export async function validateUserToken(token: string): Promise<User> {
-  return apiRequest<User>('/api/auth/me', {
+  return apiRequest<User>('/api/user/me', {
     method: 'GET',
   }, token);
 }
 
+export interface CompanyInfo {
+  id: string;
+  name: string;
+}
+
 export interface CompaniesResponse {
   success: boolean;
-  data: string[] | null;
+  data: CompanyInfo[] | null;
   error: string | null;
 }
 
-export async function fetchCompanies(): Promise<string[]> {
+export async function fetchCompanies(): Promise<CompanyInfo[]> {
   const response = await apiRequest<CompaniesResponse>('/api/auth/companies', {
     method: 'GET',
   });
-  
+
   if (response.success && response.data) {
     return response.data;
   }
-  
+
   return [];
 }
 
 // Export the base URL for debugging
 export { getApiBaseUrl };
+
+// ============================================================================
+// Invoice API Functions
+// ============================================================================
+
+import type {
+  InvoiceBackend,
+  CursorPaginatedResponse,
+  InvoiceFiltersBackend,
+  CreateInvoiceRequest,
+  CreateInvoiceResponse,
+  InvoiceUrlsResponse,
+  InvoiceStatus,
+  UploadResponse,
+  PurchaseOrderUploadResponse,
+} from '~/types';
+
+/**
+ * Fetch invoices with filters and cursor-based pagination
+ */
+export async function fetchInvoices(
+  token: string,
+  companyId: string,
+  filters: InvoiceFiltersBackend = {}
+): Promise<CursorPaginatedResponse<InvoiceBackend>> {
+  const params = new URLSearchParams();
+
+  if (filters.cursor) params.append('cursor', filters.cursor);
+  if (filters.limit) params.append('limit', filters.limit.toString());
+  if (filters.folio) params.append('folio', filters.folio);
+  if (filters.uuid) params.append('uuid', filters.uuid);
+  if (filters.estado) params.append('estado', filters.estado);
+  if (filters.fechaEmisionDesde) params.append('fechaEmisionDesde', filters.fechaEmisionDesde);
+  if (filters.fechaEmisionHasta) params.append('fechaEmisionHasta', filters.fechaEmisionHasta);
+  if (filters.fechaEntradaDesde) params.append('fechaEntradaDesde', filters.fechaEntradaDesde);
+  if (filters.fechaEntradaHasta) params.append('fechaEntradaHasta', filters.fechaEntradaHasta);
+
+  const queryString = params.toString();
+  const endpoint = `/api/invoices${queryString ? `?${queryString}` : ''}`;
+
+  return apiRequest<CursorPaginatedResponse<InvoiceBackend>>(
+    endpoint,
+    {
+      method: 'GET',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
+/**
+ * Fetch all invoices (admin only)
+ */
+export async function fetchAllInvoices(
+  token: string,
+  companyId: string,
+  filters: InvoiceFiltersBackend = {}
+): Promise<CursorPaginatedResponse<InvoiceBackend>> {
+  const params = new URLSearchParams();
+
+  if (filters.cursor) params.append('cursor', filters.cursor);
+  if (filters.limit) params.append('limit', filters.limit.toString());
+  if (filters.folio) params.append('folio', filters.folio);
+  if (filters.uuid) params.append('uuid', filters.uuid);
+  if (filters.estado) params.append('estado', filters.estado);
+  if (filters.fechaEmisionDesde) params.append('fechaEmisionDesde', filters.fechaEmisionDesde);
+  if (filters.fechaEmisionHasta) params.append('fechaEmisionHasta', filters.fechaEmisionHasta);
+  if (filters.fechaEntradaDesde) params.append('fechaEntradaDesde', filters.fechaEntradaDesde);
+  if (filters.fechaEntradaHasta) params.append('fechaEntradaHasta', filters.fechaEntradaHasta);
+
+  const queryString = params.toString();
+  const endpoint = `/api/invoices/all${queryString ? `?${queryString}` : ''}`;
+
+  return apiRequest<CursorPaginatedResponse<InvoiceBackend>>(
+    endpoint,
+    {
+      method: 'GET',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
+/**
+ * Get a single invoice by ID
+ */
+export async function fetchInvoice(
+  token: string,
+  companyId: string,
+  invoiceId: string
+): Promise<InvoiceBackend> {
+  return apiRequest<InvoiceBackend>(
+    `/api/invoices/${invoiceId}`,
+    {
+      method: 'GET',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
+/**
+ * Create a new invoice
+ */
+export async function createInvoice(
+  token: string,
+  companyId: string,
+  data: CreateInvoiceRequest
+): Promise<CreateInvoiceResponse> {
+  return apiRequest<CreateInvoiceResponse>(
+    '/api/invoices',
+    {
+      method: 'POST',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+      body: JSON.stringify(data),
+    },
+    token
+  );
+}
+
+/**
+ * Update invoice status (admin only)
+ */
+export async function updateInvoiceStatus(
+  token: string,
+  companyId: string,
+  invoiceId: string,
+  estado: InvoiceStatus
+): Promise<InvoiceBackend> {
+  return apiRequest<InvoiceBackend>(
+    `/api/invoices/${invoiceId}/status`,
+    {
+      method: 'PUT',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+      body: JSON.stringify({ estado }),
+    },
+    token
+  );
+}
+
+/**
+ * Soft delete an invoice (admin only)
+ */
+export async function deleteInvoice(
+  token: string,
+  companyId: string,
+  invoiceId: string
+): Promise<{ message: string; invoiceId: string }> {
+  return apiRequest<{ message: string; invoiceId: string }>(
+    `/api/invoices/${invoiceId}/delete`,
+    {
+      method: 'POST',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
+/**
+ * Get invoice PDF/XML URLs
+ */
+export async function fetchInvoiceUrls(
+  token: string,
+  companyId: string,
+  invoiceId: string
+): Promise<InvoiceUrlsResponse> {
+  return apiRequest<InvoiceUrlsResponse>(
+    `/api/invoices/${invoiceId}/urls`,
+    {
+      method: 'GET',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
+// ============================================================================
+// File Upload API Functions
+// ============================================================================
+
+/**
+ * Upload a file using multipart/form-data
+ */
+async function uploadFile<T>(
+  endpoint: string,
+  file: File,
+  token: string,
+  companyId: string
+): Promise<T> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}${endpoint}`;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'X-Company-Id': companyId,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiServerError(
+      errorData.message || `Error uploading file: ${response.status}`,
+      response.status
+    );
+  }
+
+  return response.json();
+}
+
+/**
+ * Upload invoice PDF
+ */
+export async function uploadInvoicePdf(
+  token: string,
+  companyId: string,
+  file: File
+): Promise<UploadResponse> {
+  return uploadFile<UploadResponse>('/api/uploads/upload/invoice-pdf', file, token, companyId);
+}
+
+/**
+ * Upload invoice XML
+ */
+export async function uploadInvoiceXml(
+  token: string,
+  companyId: string,
+  file: File
+): Promise<UploadResponse> {
+  return uploadFile<UploadResponse>('/api/uploads/upload/invoice-xml', file, token, companyId);
+}
+
+/**
+ * Upload purchase order PDF
+ * This validates that the PDF contains "Orden de compra" text
+ */
+export async function uploadPurchaseOrder(
+  token: string,
+  companyId: string,
+  file: File
+): Promise<PurchaseOrderUploadResponse> {
+  return uploadFile<PurchaseOrderUploadResponse>('/api/uploads/upload/purchase-order', file, token, companyId);
+}
+
+// ============================================================================
+// Vendor Management API Functions
+// ============================================================================
+
+export interface VendorActionResponse {
+  message: string;
+  userId: string;
+  status: string;
+}
+
+/**
+ * Approve a pending vendor
+ */
+export async function approveVendor(
+  token: string,
+  companyId: string,
+  userId: string
+): Promise<VendorActionResponse> {
+  return apiRequest<VendorActionResponse>(
+    `/api/vendors/${userId}/approve`,
+    {
+      method: 'POST',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
+/**
+ * Reject a pending vendor
+ */
+export async function rejectVendor(
+  token: string,
+  companyId: string,
+  userId: string,
+  reason?: string
+): Promise<VendorActionResponse> {
+  return apiRequest<VendorActionResponse>(
+    `/api/vendors/${userId}/reject`,
+    {
+      method: 'POST',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+      body: JSON.stringify({ reason }),
+    },
+    token
+  );
+}
