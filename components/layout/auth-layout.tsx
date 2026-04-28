@@ -7,7 +7,6 @@ import { cn } from "~/lib/utils";
 import { Icon, type IconName } from "~/components/ui/icon";
 import { Button } from "~/components/ui/button";
 import { Breadcrumbs } from "~/components/layout/breadcrumbs";
-import { RoleSwitch } from "~/components/layout/role-switch";
 import { TweaksPanel } from "~/components/_dev/tweaks-panel";
 
 interface AuthLayoutProps {
@@ -68,7 +67,10 @@ function ctaForRoute(
       : { label: "Subir documento", to: "/orders", icon: "upload" };
   }
   if (pathname.startsWith("/invoices") || pathname.startsWith("/invoice/")) {
-    return { label: "Subir factura", to: "/invoices/new", icon: "upload" };
+    // Solo vendors pueden subir facturas
+    return role === "vendor"
+      ? { label: "Subir factura", to: "/invoices/new", icon: "upload" }
+      : null;
   }
   if (pathname.startsWith("/payments")) {
     return role === "factory"
@@ -79,9 +81,18 @@ function ctaForRoute(
     return { label: "Exportar PDF", to: "/reports", icon: "download" };
   }
   // dashboard / vendors / users → role-based universal CTA
+  if (pathname === "/dashboard") {
+    // Admins no tienen CTA en dashboard
+    return role === "vendor"
+      ? { label: "Subir factura", to: "/invoices/new", icon: "upload" }
+      : null;
+  }
+  // Default para otras rutas
   return role === "factory"
     ? { label: "Nueva OC", to: "/orders/new", icon: "plus" }
-    : { label: "Subir factura", to: "/invoices/new", icon: "upload" };
+    : role === "vendor"
+    ? { label: "Subir factura", to: "/invoices/new", icon: "upload" }
+    : null;
 }
 
 function avatarInitials(name?: string): string {
@@ -215,7 +226,6 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       <div className="px-3.5 pb-4 border-t border-line bg-paper-2/60">
         <div className="pt-3.5">
-          <RoleSwitch className="mb-3" />
           <div className="flex items-center gap-2.5 px-1.5 pt-1">
             <span className="grid h-8 w-8 place-items-center rounded-full bg-clay-soft text-clay-deep font-semibold text-[12px]">
               {avatarInitials(user?.name ?? user?.email)}

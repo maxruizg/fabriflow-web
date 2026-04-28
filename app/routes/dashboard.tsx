@@ -72,6 +72,8 @@ interface VendorMetrics {
   completado: number;
   rechazado: number;
   ultimaFactura: string | null;
+  porCobrarMXN: number; // Para vendors: dinero que esperan recibir
+  porCobrarUSD: number;
 }
 
 function emptyVendorMetrics(): VendorMetrics {
@@ -85,6 +87,8 @@ function emptyVendorMetrics(): VendorMetrics {
     completado: 0,
     rechazado: 0,
     ultimaFactura: null,
+    porCobrarMXN: 0,
+    porCobrarUSD: 0,
   };
 }
 
@@ -93,6 +97,7 @@ function calculateVendorMetrics(invoices: InvoiceBackend[]): VendorMetrics {
   let latest: Date | null = null;
 
   for (const inv of invoices) {
+    // Total facturado (histórico)
     if (inv.moneda === "MXN") m.totalMXN += inv.total;
     else if (inv.moneda === "USD") m.totalUSD += inv.total;
 
@@ -102,6 +107,12 @@ function calculateVendorMetrics(invoices: InvoiceBackend[]): VendorMetrics {
     else if (e === "pagado") m.pagado++;
     else if (e === "completado") m.completado++;
     else if (e === "rechazado") m.rechazado++;
+
+    // Por cobrar: solo facturas pendientes o recibidas (no pagadas)
+    if (e === "pendiente" || e === "recibido") {
+      if (inv.moneda === "MXN") m.porCobrarMXN += inv.total;
+      else if (inv.moneda === "USD") m.porCobrarUSD += inv.total;
+    }
 
     const d = new Date(inv.fechaEntrada || inv.createdAt);
     if (!latest || d > latest) {
@@ -204,6 +215,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let activeProviders = 0;
   let balanceUSD = 0;
   let balanceMXN = 0;
+  let porPagarMXN = 0;
+  let porPagarUSD = 0;
+  let facturasVencidas = 0;
+  let montoVencidoMXN = 0;
+  let venceEn7Dias = 0;
+  let montoVenceEn7Dias = 0;
+  let venceEn30Dias = 0;
+  let montoVenceEn30Dias = 0;
+  let dpo = 0;
+  let porcentajePagadoATiempo = 0;
+  let topProveedores: Array<{ nombre: string; monto: number; facturas: number }> = [];
 
   let errorMsg: string | null = null;
 
@@ -221,17 +243,86 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const invs = r.data || [];
       allInvoices = invs;
       recentInvoices = invs.slice(0, 6);
+
+      const now = new Date();
+      const en7Dias = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const en30Dias = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      let totalDiasPago = 0;
+      let facturasPagadas = 0;
+      let facturasATiempo = 0;
+
+      // Map para agrupar por proveedor
+      const porProveedor = new Map<string, { nombre: string; monto: number; facturas: number }>();
+
       for (const inv of invs) {
+        const estado = (inv.estado || "pendiente").toLowerCase();
+        const isPending = estado === "pendiente" || estado === "recibido";
+        const fechaEmision = new Date(inv.fechaEmision || inv.createdAt);
+        const diasTranscurridos = Math.floor((now.getTime() - fechaEmision.getTime()) / (24 * 60 * 60 * 1000));
+
+        // Totales históricos
         if (inv.moneda === "USD") {
           balanceUSD += inv.total;
-          totalRevenue += inv.total;
         } else {
           balanceMXN += inv.total;
-          totalRevenue += inv.total;
+        }
+        totalRevenue += inv.total;
+
+        // PASIVO: Por pagar (solo facturas pendientes/recibidas)
+        if (isPending) {
+          if (inv.moneda === "USD") {
+            porPagarUSD += inv.total;
+          } else {
+            porPagarMXN += inv.total;
+          }
+
+          // Vencidas (más de 30 días desde emisión)
+          if (diasTranscurridos > 30) {
+            facturasVencidas++;
+            if (inv.moneda === "MXN") montoVencidoMXN += inv.total;
+          }
+
+          // Vencen en 7 días (entre 23 y 30 días)
+          if (diasTranscurridos >= 23 && diasTranscurridos <= 30) {
+            venceEn7Dias++;
+            if (inv.moneda === "MXN") montoVenceEn7Dias += inv.total;
+          }
+
+          // Vencen en 30 días (entre 0 y 30 días)
+          if (diasTranscurridos >= 0 && diasTranscurridos <= 30) {
+            venceEn30Dias++;
+            if (inv.moneda === "MXN") montoVenceEn30Dias += inv.total;
+          }
+
+          // Agrupar por proveedor
+          const proveedorNombre = inv.nombreEmisor || "Proveedor desconocido";
+          const existing = porProveedor.get(proveedorNombre) || { nombre: proveedorNombre, monto: 0, facturas: 0 };
+          existing.monto += inv.moneda === "MXN" ? inv.total : 0; // Solo MXN por ahora
+          existing.facturas += 1;
+          porProveedor.set(proveedorNombre, existing);
+        }
+
+        // DPO y % pagado a tiempo (solo facturas ya pagadas)
+        if (estado === "pagado" || estado === "completado") {
+          const fechaPago = new Date(inv.updatedAt);
+          const diasPago = Math.floor((fechaPago.getTime() - fechaEmision.getTime()) / (24 * 60 * 60 * 1000));
+          totalDiasPago += diasPago;
+          facturasPagadas++;
+
+          // Pagado a tiempo si fue antes de 30 días
+          if (diasPago <= 30) facturasATiempo++;
         }
       }
+
       totalInvoices = invs.length;
       activeProviders = new Set(invs.map((i) => i.vendor).filter(Boolean)).size;
+      dpo = facturasPagadas > 0 ? Math.round(totalDiasPago / facturasPagadas) : 0;
+      porcentajePagadoATiempo = facturasPagadas > 0 ? Math.round((facturasATiempo / facturasPagadas) * 100) : 0;
+
+      // Top 5 proveedores
+      topProveedores = Array.from(porProveedor.values())
+        .sort((a, b) => b.monto - a.monto)
+        .slice(0, 5);
     }
   } catch (e) {
     console.error("Dashboard loader error:", e);
@@ -246,7 +337,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
     roleType,
     permissions,
     vendorMetrics,
-    metrics: { totalRevenue, totalInvoices, activeProviders, balanceUSD, balanceMXN },
+    metrics: {
+      totalRevenue,
+      totalInvoices,
+      activeProviders,
+      balanceUSD,
+      balanceMXN,
+      porPagarMXN,
+      porPagarUSD,
+      facturasVencidas,
+      montoVencidoMXN,
+      venceEn7Dias,
+      montoVenceEn7Dias,
+      venceEn30Dias,
+      montoVenceEn30Dias,
+      dpo,
+      porcentajePagadoATiempo,
+      topProveedores,
+    },
     recentInvoices,
     aging,
   });
@@ -310,7 +418,7 @@ function DashboardBody({ data }: DashboardBodyProps) {
   const greeting = `${dayPart()}, ${user?.name?.split(" ")[0] ?? "—"}`;
   const subtitle = showVendorView
     ? `${user?.companyName ?? "Tu empresa"} · facturas y pagos recibidos`
-    : `${user?.companyName ?? "Tu empresa"} · ${data.metrics.totalInvoices} facturas activas, ${data.metrics.activeProviders} proveedores`;
+    : `${user?.companyName ?? "Tu empresa"} · Control de facturas y pagos a proveedores`;
 
   return (
     <div className="space-y-6">
@@ -336,6 +444,11 @@ function DashboardBody({ data }: DashboardBodyProps) {
         <FactoryKpis metrics={data.metrics} />
       )}
 
+      {/* Top proveedores - solo para admins */}
+      {!showVendorView && data.metrics.topProveedores.length > 0 && (
+        <TopProveedoresCard proveedores={data.metrics.topProveedores} />
+      )}
+
       <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
         <RecentInvoicesCard
           invoices={data.recentInvoices}
@@ -359,41 +472,41 @@ function DashboardBody({ data }: DashboardBodyProps) {
 // ---------- KPI grids ----------
 
 function VendorKpis({ metrics }: { metrics: VendorMetrics }) {
-  const mxn = formatMoney(metrics.totalMXN, "MXN");
-  const usd = formatMoney(metrics.totalUSD, "USD");
+  const porCobrarMXN = formatMoney(metrics.porCobrarMXN, "MXN");
+  const porCobrarUSD = formatMoney(metrics.porCobrarUSD, "USD");
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
       <StatCard
         label="Por cobrar (MXN)"
-        currency={mxn.symbol}
+        currency={porCobrarMXN.symbol}
         value={
           <>
-            {mxn.integer}
+            {porCobrarMXN.integer}
             <span className="ff-stat-val text-ink-3 text-[20px] font-normal">
-              .{mxn.decimal}
+              .{porCobrarMXN.decimal}
             </span>
           </>
         }
         delta={{
-          label: `${metrics.pendiente + metrics.recibido} facturas abiertas`,
+          label: `${metrics.pendiente + metrics.recibido} facturas pendientes`,
         }}
         sparkPath="M0 22 L10 18 L20 14 L30 16 L40 8 L50 12 L60 6 L70 10 L80 4"
       />
       <StatCard
         label="Por cobrar (USD)"
-        currency={usd.symbol}
+        currency={porCobrarUSD.symbol}
         value={
           <>
-            {usd.integer}
+            {porCobrarUSD.integer}
             <span className="ff-stat-val text-ink-3 text-[20px] font-normal">
-              .{usd.decimal}
+              .{porCobrarUSD.decimal}
             </span>
           </>
         }
-        delta={{ label: "Convertido a tipo de cambio actual" }}
+        delta={{ label: `Solo facturas pendientes de pago` }}
       />
       <StatCard
-        label="Facturas pagadas"
+        label="Facturas cobradas"
         value={String(metrics.pagado + metrics.completado)}
         delta={{
           label: `${metrics.completado} completadas · ${metrics.pagado} pagadas`,
@@ -419,49 +532,99 @@ interface FactoryMetrics {
   activeProviders: number;
   balanceUSD: number;
   balanceMXN: number;
+
+  // Pasivo total (lo que DEBEMOS a proveedores)
+  porPagarMXN: number; // Solo facturas pendientes/recibidas
+  porPagarUSD: number;
+
+  // Vencimientos
+  facturasVencidas: number;
+  montoVencidoMXN: number;
+  venceEn7Dias: number; // Cantidad de facturas
+  montoVenceEn7Dias: number;
+  venceEn30Dias: number;
+  montoVenceEn30Dias: number;
+
+  // Métricas de eficiencia
+  dpo: number; // Days Payable Outstanding
+  porcentajePagadoATiempo: number;
+
+  // Top proveedores
+  topProveedores: Array<{ nombre: string; monto: number; facturas: number }>;
 }
 
 function FactoryKpis({ metrics }: { metrics: FactoryMetrics }) {
-  const ap = formatMoney(metrics.balanceMXN, "MXN");
-  const usd = formatMoney(metrics.balanceUSD, "USD");
+  const porPagar = formatMoney(metrics.porPagarMXN, "MXN");
+  const vencido = formatMoney(metrics.montoVencidoMXN, "MXN");
+  const vence7dias = formatMoney(metrics.montoVenceEn7Dias, "MXN");
+
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
+      {/* Pasivo total por pagar */}
       <StatCard
-        label="Cuentas por pagar"
-        currency={ap.symbol}
+        label="Pasivo total (MXN)"
+        currency={porPagar.symbol}
         value={
           <>
-            {ap.integer}
+            {porPagar.integer}
             <span className="ff-stat-val text-ink-3 text-[20px] font-normal">
-              .{ap.decimal}
+              .{porPagar.decimal}
             </span>
           </>
         }
-        delta={{ label: `${metrics.totalInvoices} facturas activas` }}
+        delta={{
+          label: `${metrics.activeProviders} proveedores activos`,
+        }}
         sparkPath="M0 22 L10 18 L20 14 L30 16 L40 8 L50 12 L60 6 L70 10 L80 4"
       />
+
+      {/* Facturas vencidas */}
       <StatCard
-        label="Balance USD"
-        currency={usd.symbol}
-        value={
-          <>
-            {usd.integer}
-            <span className="ff-stat-val text-ink-3 text-[20px] font-normal">
-              .{usd.decimal}
-            </span>
-          </>
-        }
-        delta={{ label: "Operaciones en dólares" }}
+        label="Vencidas (+30d)"
+        value={String(metrics.facturasVencidas)}
+        delta={{
+          label: metrics.facturasVencidas > 0
+            ? `${vencido.symbol}${vencido.integer}.${vencido.decimal} adeudado`
+            : "✓ Sin facturas vencidas",
+          direction: metrics.facturasVencidas > 0 ? "down" : "up",
+        }}
       />
+
+      {/* Vencen en 7 días */}
       <StatCard
-        label="Facturas activas"
-        value={String(metrics.totalInvoices)}
-        delta={{ label: "Total en sistema" }}
+        label="Vencen en 7 días"
+        value={String(metrics.venceEn7Dias)}
+        delta={{
+          label: metrics.venceEn7Dias > 0
+            ? `${vence7dias.symbol}${vence7dias.integer}.${vence7dias.decimal} a pagar`
+            : "Ninguna próxima",
+        }}
       />
+
+      {/* DPO - Days Payable Outstanding */}
       <StatCard
-        label="Proveedores activos"
-        value={String(metrics.activeProviders)}
-        delta={{ label: "Con actividad reciente" }}
+        label="DPO"
+        value={`${metrics.dpo}d`}
+        delta={{
+          label: metrics.dpo > 0
+            ? `Días promedio de pago`
+            : "Sin datos históricos",
+          direction: metrics.dpo > 45 ? "up" : metrics.dpo > 30 ? "neutral" : metrics.dpo > 0 ? "down" : undefined,
+        }}
+      />
+
+      {/* Eficiencia de pago */}
+      <StatCard
+        label="Pagado a tiempo"
+        value={`${metrics.porcentajePagadoATiempo}%`}
+        delta={{
+          label: metrics.porcentajePagadoATiempo >= 80
+            ? "✓ Excelente cumplimiento"
+            : metrics.porcentajePagadoATiempo >= 60
+            ? "Cumplimiento aceptable"
+            : "Requiere atención",
+          direction: metrics.porcentajePagadoATiempo >= 80 ? "up" : metrics.porcentajePagadoATiempo >= 60 ? "neutral" : "down",
+        }}
       />
     </div>
   );
@@ -553,8 +716,8 @@ function AgingCard({ buckets }: { buckets: AgingBucket[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Antigüedad de saldos</CardTitle>
-        <CardDescription>Facturas pendientes por bucket</CardDescription>
+        <CardTitle>Antigüedad de saldos (AP Aging)</CardTitle>
+        <CardDescription>Pasivos por antigüedad de emisión</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {buckets.map((b, i) => {
@@ -592,6 +755,56 @@ function AgingCard({ buckets }: { buckets: AgingBucket[] }) {
 
 // ---------- Activity feed ----------
 
+function TopProveedoresCard({
+  proveedores,
+}: {
+  proveedores: Array<{ nombre: string; monto: number; facturas: number }>;
+}) {
+  const total = proveedores.reduce((acc, p) => acc + p.monto, 0);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Top proveedores por monto adeudado</CardTitle>
+        <CardDescription>
+          Concentración de pasivos por proveedor
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {proveedores.map((prov, i) => {
+          const m = formatMoney(prov.monto, "MXN");
+          const pct = total > 0 ? Math.round((prov.monto / total) * 100) : 0;
+          const tone = i === 0 ? "wine" : i === 1 ? "rust" : i === 2 ? "clay" : "moss";
+
+          return (
+            <div key={prov.nombre} className="space-y-1.5">
+              <div className="flex items-baseline justify-between gap-2 text-[12px]">
+                <span className="font-medium text-ink truncate">
+                  {i + 1}. {prov.nombre}
+                </span>
+                <span className="font-mono text-ink">
+                  {m.symbol}
+                  {m.integer}
+                  <span className="text-ink-3">.{m.decimal}</span>
+                  <span className="ml-1.5 text-ink-3 text-[10px]">
+                    {prov.facturas} fact · {pct}%
+                  </span>
+                </span>
+              </div>
+              <AgingBar pct={pct} tone={tone} label={prov.nombre} />
+            </div>
+          );
+        })}
+        {proveedores.length === 0 && (
+          <div className="text-[12px] text-ink-3 text-center pt-2">
+            Sin proveedores con saldo pendiente
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ActivityCard({ isVendor }: { isVendor: boolean }) {
   // TODO(phase-3): wire to GET /api/activity (audit_log + business events).
   // Static seed for Phase 2 to demonstrate the UI shape.
@@ -620,37 +833,50 @@ function ActivityCard({ isVendor }: { isVendor: boolean }) {
       ]
     : [
         {
+          tone: "wine" as const,
+          body: (
+            <>
+              3 facturas vencidas requieren atención inmediata
+            </>
+          ),
+          meta: "hoy · Urgente",
+        },
+        {
+          tone: "rust" as const,
+          body: (
+            <>
+              Factura <span className="font-mono">FAC-00421</span> próxima a vencer (5 días)
+            </>
+          ),
+          meta: "hoy 11:15",
+        },
+        {
           tone: "moss" as const,
           body: (
             <>
-              Sistema validó <span className="font-mono">FAC-00412</span>{" "}
-              automáticamente
+              Nueva factura validada de Proveedor XYZ{" "}
+              <span className="font-mono">$45,230.00</span>
             </>
           ),
           meta: "hoy 10:02 · CFDI OK",
         },
         {
           tone: "clay" as const,
-          body: <>Marta I. aprobó nota de crédito NC-00081</>,
+          body: <>Sistema procesó pago automático PG-00158</>,
           meta: "hoy 09:24",
         },
         {
-          tone: "rust" as const,
-          body: <>Proveedor reportó retraso en OC-00405</>,
-          meta: "ayer 17:02",
-        },
-        {
           tone: "ink" as const,
-          body: <>Remito subido para FAC-00398</>,
-          meta: "ayer 14:30",
+          body: <>Proveedor ABC subió factura FAC-00422</>,
+          meta: "ayer 17:02",
         },
       ];
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Actividad</CardTitle>
-        <CardDescription>Eventos recientes del sistema</CardDescription>
+        <CardTitle>Actividad reciente</CardTitle>
+        <CardDescription>Eventos y alertas del sistema</CardDescription>
       </CardHeader>
       <CardContent>
         <Timeline>

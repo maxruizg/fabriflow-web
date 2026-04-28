@@ -1,6 +1,5 @@
 import {
   createContext,
-  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -12,22 +11,20 @@ import { useUser } from "~/lib/auth-context";
 
 /**
  * "Perspective" the UI is currently rendering for.
- *  - factory: buyer-side — manages POs, payments out, vendor relationships
- *  - vendor:  supplier-side — sees their orders/invoices/payments in
+ *  - factory: buyer-side — manages POs, payments out, vendor relationships (admins/super-admins)
+ *  - vendor:  supplier-side — sees their orders/invoices/payments in (vendors/proveedores)
  *
- * Some users have access to both (e.g. super admins of multi-side orgs).
- * Single-role users have their perspective fixed and the switch is hidden.
+ * El rol es FIJO y determinado por el rol del usuario en la base de datos.
+ * NO se puede cambiar manualmente.
  */
 export type Role = "factory" | "vendor";
 
 interface RoleContextType {
   role: Role;
   setRole: (next: Role) => void;
-  /** True if the user has access to both perspectives — drives visibility of the switcher. */
+  /** Siempre false - el rol no se puede cambiar */
   canSwitch: boolean;
 }
-
-const STORAGE_KEY = "ff_role";
 
 const RoleContext = createContext<RoleContextType | null>(null);
 
@@ -39,9 +36,10 @@ function deriveDefault(permissions: string[] | undefined, userRole: string | und
   const isAdmin = perms.includes("*") || (userRole ?? "").toLowerCase().includes("admin");
   const isVendor = (userRole ?? "").toLowerCase().includes("vendor") || (userRole ?? "").toLowerCase().includes("proveedor");
 
-  // A super-admin or admin starts in "factory" perspective and can flip.
-  // A pure vendor stays vendor and the switcher is hidden.
-  if (isAdmin) return { role: "factory", canSwitch: true };
+  // El rol es FIJO basado en el usuario - NO se puede cambiar
+  // Admins y super-admins ven perspectiva "factory" (cuentas por pagar)
+  // Vendors ven perspectiva "vendor" (cuentas por cobrar)
+  if (isAdmin) return { role: "factory", canSwitch: false };
   if (isVendor) return { role: "vendor", canSwitch: false };
   // Fallback: regular factory user.
   return { role: "factory", canSwitch: false };
@@ -54,36 +52,21 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     [user?.permissions, user?.role],
   );
 
+  // El rol es FIJO - no se puede cambiar, siempre viene del usuario
   const [role, setRoleState] = useState<Role>(initial.role);
 
-  // Hydrate from localStorage on the client (purely UI preference, never auth).
+  // Actualizar el rol si el usuario cambia (ej: login/logout)
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if ((saved === "factory" || saved === "vendor") && initial.canSwitch) {
-        setRoleState(saved);
-      } else if (!initial.canSwitch) {
-        setRoleState(initial.role);
-      }
-    } catch {
-      /* localStorage unavailable — stay with derived default */
-    }
-  }, [initial.canSwitch, initial.role]);
+    setRoleState(initial.role);
+  }, [initial.role]);
 
-  const setRole = useCallback(
-    (next: Role) => {
-      if (!initial.canSwitch) return;
-      setRoleState(next);
-      try {
-        localStorage.setItem(STORAGE_KEY, next);
-      } catch {
-        /* ignore */
-      }
-    },
-    [initial.canSwitch],
-  );
+  // setRole es no-op - el rol no se puede cambiar manualmente
+  const setRole = (_next: Role) => {
+    // No hacer nada - el rol es fijo basado en el usuario
+    return;
+  };
 
-  const value: RoleContextType = { role, setRole, canSwitch: initial.canSwitch };
+  const value: RoleContextType = { role, setRole, canSwitch: false };
   return <RoleContext.Provider value={value}>{children}</RoleContext.Provider>;
 }
 

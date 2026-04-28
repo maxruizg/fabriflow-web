@@ -11,6 +11,7 @@ import {
   Scripts,
   ScrollRestoration,
   useLoaderData,
+  useRouteLoaderData,
 } from "@remix-run/react";
 import { json } from "@remix-run/cloudflare";
 import { AuthProvider } from "~/lib/auth-context";
@@ -125,7 +126,7 @@ const NO_FLASH_SCRIPT = `(function(){try{
 }catch(e){}})();`;
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const data = useLoaderData<typeof loader>();
+  const data = useRouteLoaderData<typeof loader>("root");
   const prefs: ThemePrefs = data?.themePrefs ?? {
     theme: "light",
     accent: "warm",

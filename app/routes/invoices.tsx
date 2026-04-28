@@ -199,6 +199,7 @@ export default function Invoices() {
   // Detail dialog state
   const [selectedInvoice, setSelectedInvoice] = useState<InvoiceBackend | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"split" | "document" | "details">("split");
 
   // Infinite scroll state
   const [allInvoices, setAllInvoices] = useState<InvoiceBackend[]>(invoices || []);
@@ -490,8 +491,8 @@ export default function Invoices() {
                 {allInvoices.map((invoice) => (
                   <TableRow
                     key={invoice.id}
-                    className="cursor-pointer"
-                    onDoubleClick={() => {
+                    className="cursor-pointer hover:bg-ink-5/50 transition-colors"
+                    onClick={() => {
                       setSelectedInvoice(invoice);
                       setIsDetailOpen(true);
                     }}
@@ -602,280 +603,403 @@ export default function Invoices() {
         </Card>
       </div>
 
-      {/* Invoice Detail Dialog */}
+      {/* Invoice Detail Dialog - Improved UI/UX */}
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-          <DialogHeader className="flex-shrink-0">
-            <DialogTitle className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                <FileText className="h-5 w-5 text-primary" />
+        <DialogContent className="max-w-7xl h-[90vh] p-0 overflow-hidden flex flex-col gap-0">
+          {/* Header */}
+          <DialogHeader className="flex-shrink-0 px-6 py-4 border-b border-line bg-paper">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-10 w-10 rounded-lg bg-clay-soft flex items-center justify-center flex-shrink-0">
+                  <FileText className="h-5 w-5 text-clay" />
+                </div>
+                <div className="min-w-0">
+                  <DialogTitle className="text-[18px] font-semibold">
+                    Factura {selectedInvoice?.folio}
+                  </DialogTitle>
+                  <p className="text-[13px] text-ink-3 mt-0.5 truncate max-w-[400px]">
+                    {selectedInvoice?.nombreEmisor}
+                  </p>
+                </div>
               </div>
-              <div>
-                <span className="text-lg">Factura {selectedInvoice?.folio}</span>
-                <p className="text-sm font-normal text-muted-foreground mt-0.5">
-                  {selectedInvoice?.nombreEmisor}
-                </p>
-              </div>
-              {selectedInvoice ? (
-                <span className="ml-auto">
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {selectedInvoice ? (
                   <Badge tone={statusTone(selectedInvoice.estado)}>
                     {statusLabel(selectedInvoice.estado)}
                   </Badge>
-                </span>
-              ) : null}
-            </DialogTitle>
+                ) : null}
+                {/* View Mode Toggles */}
+                <div className="flex items-center gap-1 ml-3 border border-line rounded-lg p-1">
+                  <Button
+                    variant={viewMode === "split" ? "clay" : "ghost"}
+                    size="sm"
+                    onClick={() => setViewMode("split")}
+                    className="h-7 px-2 text-[11px]"
+                    title="Vista combinada"
+                  >
+                    <Icon name="grid" size={12} className="mr-1" />
+                    Combinada
+                  </Button>
+                  <Button
+                    variant={viewMode === "document" ? "clay" : "ghost"}
+                    size="sm"
+                    onClick={() => setViewMode("document")}
+                    className="h-7 px-2 text-[11px]"
+                    title="Solo documento"
+                  >
+                    <Icon name="file" size={12} className="mr-1" />
+                    Documento
+                  </Button>
+                  <Button
+                    variant={viewMode === "details" ? "clay" : "ghost"}
+                    size="sm"
+                    onClick={() => setViewMode("details")}
+                    className="h-7 px-2 text-[11px]"
+                    title="Solo detalles"
+                  >
+                    <Icon name="list" size={12} className="mr-1" />
+                    Detalles
+                  </Button>
+                </div>
+              </div>
+            </div>
           </DialogHeader>
 
           {selectedInvoice && (
-            <Tabs defaultValue="details" className="flex-1 min-h-0 flex flex-col">
-              <TabsList className="flex-shrink-0 grid w-full grid-cols-3">
-                <TabsTrigger value="details">Detalles</TabsTrigger>
-                <TabsTrigger value="documents">Documentos</TabsTrigger>
-                <TabsTrigger value="preview">Vista Previa</TabsTrigger>
-              </TabsList>
-
-              {/* Detalles Tab */}
-              <TabsContent value="details" className="flex-1 overflow-auto mt-4">
-                <div className="grid grid-cols-2 gap-6">
-                  {/* Datos del Emisor */}
-                  <div className="space-y-4">
-                    <h4 className="font-semibold text-sm flex items-center gap-2">
-                      <Building2 className="h-4 w-4" />
-                      Emisor
-                    </h4>
-                    <div className="bg-muted/50 rounded-lg p-4 space-y-3">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Nombre</p>
-                        <p className="font-medium">{selectedInvoice.nombreEmisor}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">RFC</p>
-                        <p className="font-mono">{selectedInvoice.rfcEmisor}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Datos del Receptor */}
-                  <div className="space-y-4">
-                    <h4 className="font-semibold text-sm flex items-center gap-2">
-                      <Building2 className="h-4 w-4" />
-                      Receptor
-                    </h4>
-                    <div className="bg-muted/50 rounded-lg p-4 space-y-3">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Nombre</p>
-                        <p className="font-medium">{selectedInvoice.nombreReceptor}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">RFC</p>
-                        <p className="font-mono">{selectedInvoice.rfcReceptor}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Datos de la Factura */}
-                  <div className="space-y-4">
-                    <h4 className="font-semibold text-sm flex items-center gap-2">
-                      <Hash className="h-4 w-4" />
-                      Datos CFDI
-                    </h4>
-                    <div className="bg-muted/50 rounded-lg p-4 space-y-3">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <p className="text-xs text-muted-foreground">Folio</p>
-                          <p className="font-mono font-medium">{selectedInvoice.folio}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Moneda</p>
-                          <p>{selectedInvoice.moneda}</p>
-                        </div>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">UUID</p>
-                        <p className="font-mono text-xs break-all">{selectedInvoice.uuid}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Fechas */}
-                  <div className="space-y-4">
-                    <h4 className="font-semibold text-sm flex items-center gap-2">
-                      <Calendar className="h-4 w-4" />
-                      Fechas
-                    </h4>
-                    <div className="bg-muted/50 rounded-lg p-4 space-y-3">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <p className="text-xs text-muted-foreground">Fecha Emisión</p>
-                          <p>{new Date(selectedInvoice.fechaEmision).toLocaleDateString("es-MX", {
-                            day: "numeric",
-                            month: "long",
-                            year: "numeric"
-                          })}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Fecha Entrada</p>
-                          <p>{new Date(selectedInvoice.fechaEntrada).toLocaleDateString("es-MX", {
-                            day: "numeric",
-                            month: "long",
-                            year: "numeric"
-                          })}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Montos */}
-                  <div className="col-span-2 space-y-4">
-                    <h4 className="font-semibold text-sm flex items-center gap-2">
-                      <DollarSign className="h-4 w-4" />
-                      Montos
-                    </h4>
-                    <div className="bg-muted/50 rounded-lg p-4">
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {/* Split View */}
+              {viewMode === "split" && (
+                <div className="h-full grid grid-cols-2 gap-0 divide-x divide-line">
+                  {/* Left: PDF Viewer */}
+                  <div className="h-full overflow-hidden flex flex-col bg-ink-5">
+                    <div className="flex-shrink-0 px-4 py-2 bg-paper border-b border-line">
                       <div className="flex items-center justify-between">
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground">Subtotal</p>
-                          <p className="text-lg tabular-nums">
-                            ${selectedInvoice.subtotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                          </p>
+                        <span className="text-[12px] font-medium text-ink-2">Documento PDF</span>
+                        {selectedInvoice.pdfUrl && (
+                          <Button variant="ghost" size="sm" className="h-7 text-[11px]" asChild>
+                            <a href={selectedInvoice.pdfUrl} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="h-3 w-3 mr-1" />
+                              Abrir en nueva pestaña
+                            </a>
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      {selectedInvoice.pdfUrl ? (
+                        <iframe
+                          src={selectedInvoice.pdfUrl}
+                          className="w-full h-full border-0"
+                          title={`PDF de ${selectedInvoice.folio}`}
+                        />
+                      ) : (
+                        <div className="flex items-center justify-center h-full">
+                          <div className="text-center text-ink-3">
+                            <File className="h-12 w-12 mx-auto mb-3 opacity-40" />
+                            <p className="font-medium text-[13px]">No hay PDF disponible</p>
+                            <p className="text-[11px] mt-1">Esta factura no tiene documento adjunto</p>
+                          </div>
                         </div>
-                        <Separator orientation="vertical" className="h-12" />
-                        <div className="space-y-1 text-right">
-                          <p className="text-xs text-muted-foreground">Total</p>
-                          <p className="text-2xl font-bold tabular-nums text-primary">
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right: Details */}
+                  <div className="h-full overflow-auto">
+                    <div className="p-6 space-y-6">
+                      {/* Quick Info */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="p-4 bg-clay-bg border border-clay rounded-lg">
+                          <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-1">Total</p>
+                          <p className="text-[24px] font-bold text-clay font-mono">
                             ${selectedInvoice.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                            <span className="text-sm font-normal text-muted-foreground ml-1">
-                              {selectedInvoice.moneda}
-                            </span>
+                            <span className="text-[14px] font-normal text-ink-3 ml-1">{selectedInvoice.moneda}</span>
+                          </p>
+                        </div>
+                        <div className="p-4 bg-ink-5 rounded-lg">
+                          <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-1">Fecha</p>
+                          <p className="text-[14px] font-medium text-ink">
+                            {new Date(selectedInvoice.fechaEmision).toLocaleDateString("es-MX", {
+                              day: "numeric",
+                              month: "long",
+                              year: "numeric"
+                            })}
                           </p>
                         </div>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* Conceptos */}
-                  {selectedInvoice.detalles && selectedInvoice.detalles.length > 0 && (
-                    <div className="col-span-2 space-y-4">
-                      <h4 className="font-semibold text-sm flex items-center gap-2">
-                        <FileCheck className="h-4 w-4" />
-                        Conceptos ({selectedInvoice.detalles.length})
-                      </h4>
-                      <div className="border rounded-lg overflow-hidden">
-                        <Table>
-                          <TableHeader>
-                            <TableRow className="bg-muted/50">
-                              <TableHead className="text-xs">Descripción</TableHead>
-                              <TableHead className="text-xs text-center w-[80px]">Cant.</TableHead>
-                              <TableHead className="text-xs text-right w-[100px]">P. Unit.</TableHead>
-                              <TableHead className="text-xs text-right w-[100px]">Importe</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {selectedInvoice.detalles.map((detalle, idx) => (
-                              <TableRow key={idx}>
-                                <TableCell className="text-sm">
-                                  <p className="font-medium">{detalle.descripcion}</p>
-                                  <p className="text-xs text-muted-foreground">{detalle.unidad}</p>
-                                </TableCell>
-                                <TableCell className="text-center tabular-nums">{detalle.cantidad}</TableCell>
-                                <TableCell className="text-right tabular-nums">
-                                  ${detalle.precioUnitario.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums font-medium">
-                                  ${detalle.importe.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                      {/* Emisor / Receptor */}
+                      <div className="space-y-3">
+                        <h4 className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Partes</h4>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="p-3 bg-ink-5 rounded-lg">
+                            <p className="text-[10px] font-mono uppercase tracking-wider text-ink-3 mb-1">Emisor</p>
+                            <p className="font-medium text-[13px] text-ink">{selectedInvoice.nombreEmisor}</p>
+                            <p className="text-[11px] font-mono text-ink-3 mt-0.5">{selectedInvoice.rfcEmisor}</p>
+                          </div>
+                          <div className="p-3 bg-ink-5 rounded-lg">
+                            <p className="text-[10px] font-mono uppercase tracking-wider text-ink-3 mb-1">Receptor</p>
+                            <p className="font-medium text-[13px] text-ink">{selectedInvoice.nombreReceptor}</p>
+                            <p className="text-[11px] font-mono text-ink-3 mt-0.5">{selectedInvoice.rfcReceptor}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* UUID */}
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3">UUID Fiscal</p>
+                        <p className="font-mono text-[11px] text-ink-2 bg-ink-5 p-2 rounded break-all">
+                          {selectedInvoice.uuid}
+                        </p>
+                      </div>
+
+                      {/* Conceptos */}
+                      {selectedInvoice.detalles && selectedInvoice.detalles.length > 0 && (
+                        <div className="space-y-3">
+                          <h4 className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
+                            Conceptos ({selectedInvoice.detalles.length})
+                          </h4>
+                          <div className="border border-line rounded-lg overflow-hidden">
+                            <Table>
+                              <TableHeader>
+                                <TableRow className="bg-ink-5">
+                                  <TableHead className="text-[10px] font-mono">Descripción</TableHead>
+                                  <TableHead className="text-[10px] font-mono text-right w-[60px]">Cant.</TableHead>
+                                  <TableHead className="text-[10px] font-mono text-right w-[100px]">Importe</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {selectedInvoice.detalles.map((detalle, idx) => (
+                                  <TableRow key={idx}>
+                                    <TableCell className="text-[12px]">
+                                      <p className="font-medium truncate">{detalle.descripcion}</p>
+                                      <p className="text-[10px] text-ink-3">{detalle.unidad}</p>
+                                    </TableCell>
+                                    <TableCell className="text-right tabular-nums text-[12px]">
+                                      {detalle.cantidad}
+                                    </TableCell>
+                                    <TableCell className="text-right tabular-nums font-medium text-[12px]">
+                                      ${detalle.importe.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Actions */}
+                      <div className="space-y-2 pt-4 border-t border-line">
+                        <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-2">Acciones</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {selectedInvoice.pdfUrl && (
+                            <Button variant="outline" size="sm" className="justify-start" asChild>
+                              <a href={selectedInvoice.pdfUrl} target="_blank" rel="noopener noreferrer" download>
+                                <Download className="h-3.5 w-3.5 mr-1.5" />
+                                Descargar PDF
+                              </a>
+                            </Button>
+                          )}
+                          {selectedInvoice.xmlUrl && (
+                            <Button variant="outline" size="sm" className="justify-start" asChild>
+                              <a href={selectedInvoice.xmlUrl} target="_blank" rel="noopener noreferrer" download>
+                                <Download className="h-3.5 w-3.5 mr-1.5" />
+                                Descargar XML
+                              </a>
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </div>
                 </div>
-              </TabsContent>
+              )}
 
-              {/* Documentos Tab */}
-              <TabsContent value="documents" className="flex-1 overflow-auto mt-4">
-                <div className="space-y-4">
-                  {/* Documentos principales */}
-                  <div className="grid grid-cols-2 gap-4">
+              {/* Document Only View */}
+              {viewMode === "document" && (
+                <div className="h-full flex flex-col bg-ink-5">
+                  <div className="flex-shrink-0 px-6 py-3 bg-paper border-b border-line flex items-center justify-between">
+                    <span className="text-[13px] font-medium text-ink">Documento PDF</span>
                     {selectedInvoice.pdfUrl && (
-                      <a
-                        href={selectedInvoice.pdfUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors"
-                      >
-                        <div className="h-10 w-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-                          <File className="h-5 w-5 text-red-600 dark:text-red-400" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-medium text-sm">Factura PDF</p>
-                          <p className="text-xs text-muted-foreground">Documento original</p>
-                        </div>
-                        <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                      </a>
-                    )}
-                    {selectedInvoice.xmlUrl && (
-                      <a
-                        href={selectedInvoice.xmlUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors"
-                      >
-                        <div className="h-10 w-10 rounded-lg bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                          <FileText className="h-5 w-5 text-green-600 dark:text-green-400" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-medium text-sm">CFDI XML</p>
-                          <p className="text-xs text-muted-foreground">Archivo fiscal</p>
-                        </div>
-                        <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                      </a>
+                      <Button variant="ghost" size="sm" className="h-8" asChild>
+                        <a href={selectedInvoice.pdfUrl} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                          Abrir en nueva pestaña
+                        </a>
+                      </Button>
                     )}
                   </div>
+                  <div className="flex-1 overflow-hidden">
+                    {selectedInvoice.pdfUrl ? (
+                      <iframe
+                        src={selectedInvoice.pdfUrl}
+                        className="w-full h-full border-0"
+                        title={`PDF de ${selectedInvoice.folio}`}
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <div className="text-center text-ink-3">
+                          <File className="h-16 w-16 mx-auto mb-4 opacity-40" />
+                          <p className="font-medium text-[14px]">No hay PDF disponible</p>
+                          <p className="text-[12px] mt-1">Esta factura no tiene documento adjunto</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
-                  {!selectedInvoice.pdfUrl && !selectedInvoice.xmlUrl && (
-                    <div className="text-center py-12 text-muted-foreground">
-                      <File className="h-10 w-10 mx-auto mb-3 opacity-40" />
-                      <p className="font-medium">No hay documentos adjuntos</p>
-                      <p className="text-sm mt-1">Esta factura no tiene archivos asociados</p>
+              {/* Details Only View */}
+              {viewMode === "details" && (
+                <div className="h-full overflow-auto">
+                  <div className="p-8 max-w-4xl mx-auto space-y-6">
+                    {/* Header Info */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="p-5 bg-clay-bg border border-clay rounded-lg">
+                        <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-1.5">Total</p>
+                        <p className="text-[28px] font-bold text-clay font-mono leading-none">
+                          ${selectedInvoice.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-[12px] text-ink-3 mt-1">{selectedInvoice.moneda}</p>
+                      </div>
+                      <div className="p-5 bg-ink-5 rounded-lg">
+                        <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-1.5">Subtotal</p>
+                        <p className="text-[18px] font-semibold text-ink font-mono">
+                          ${selectedInvoice.subtotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                      <div className="p-5 bg-ink-5 rounded-lg">
+                        <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-1.5">Folio</p>
+                        <p className="text-[18px] font-semibold text-ink font-mono">{selectedInvoice.folio}</p>
+                      </div>
                     </div>
-                  )}
 
-                  {/* Documentos relacionados (complementos, notas) */}
-                  <Separator />
-                  <div>
-                    <h4 className="font-semibold text-sm mb-3">Documentos Relacionados</h4>
-                    <div className="text-center py-8 text-muted-foreground border rounded-lg border-dashed">
-                      <FileCheck className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                      <p className="text-sm">Sin complementos de pago asociados</p>
+                    {/* Emisor / Receptor */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-5 bg-ink-5 rounded-lg">
+                        <h4 className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-3">Emisor</h4>
+                        <p className="font-semibold text-[15px] text-ink">{selectedInvoice.nombreEmisor}</p>
+                        <p className="text-[12px] font-mono text-ink-3 mt-1">{selectedInvoice.rfcEmisor}</p>
+                      </div>
+                      <div className="p-5 bg-ink-5 rounded-lg">
+                        <h4 className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-3">Receptor</h4>
+                        <p className="font-semibold text-[15px] text-ink">{selectedInvoice.nombreReceptor}</p>
+                        <p className="text-[12px] font-mono text-ink-3 mt-1">{selectedInvoice.rfcReceptor}</p>
+                      </div>
+                    </div>
+
+                    {/* Fechas y UUID */}
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-1.5">Fecha Emisión</p>
+                          <p className="text-[13px] font-medium text-ink">
+                            {new Date(selectedInvoice.fechaEmision).toLocaleDateString("es-MX", {
+                              day: "numeric",
+                              month: "long",
+                              year: "numeric"
+                            })}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-1.5">Fecha Entrada</p>
+                          <p className="text-[13px] font-medium text-ink">
+                            {new Date(selectedInvoice.fechaEntrada).toLocaleDateString("es-MX", {
+                              day: "numeric",
+                              month: "long",
+                              year: "numeric"
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-1.5">UUID Fiscal</p>
+                        <p className="font-mono text-[11px] text-ink-2 bg-ink-5 p-3 rounded break-all">
+                          {selectedInvoice.uuid}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Conceptos */}
+                    {selectedInvoice.detalles && selectedInvoice.detalles.length > 0 && (
+                      <div className="space-y-3">
+                        <h4 className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
+                          Conceptos ({selectedInvoice.detalles.length})
+                        </h4>
+                        <div className="border border-line rounded-lg overflow-hidden">
+                          <Table>
+                            <TableHeader>
+                              <TableRow className="bg-ink-5">
+                                <TableHead className="text-[11px] font-mono">Descripción</TableHead>
+                                <TableHead className="text-[11px] font-mono text-center w-[80px]">Unidad</TableHead>
+                                <TableHead className="text-[11px] font-mono text-right w-[80px]">Cant.</TableHead>
+                                <TableHead className="text-[11px] font-mono text-right w-[120px]">P. Unit.</TableHead>
+                                <TableHead className="text-[11px] font-mono text-right w-[120px]">Importe</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {selectedInvoice.detalles.map((detalle, idx) => (
+                                <TableRow key={idx}>
+                                  <TableCell className="text-[13px] font-medium">{detalle.descripcion}</TableCell>
+                                  <TableCell className="text-center text-[12px] text-ink-3">{detalle.unidad}</TableCell>
+                                  <TableCell className="text-right tabular-nums text-[13px]">{detalle.cantidad}</TableCell>
+                                  <TableCell className="text-right tabular-nums text-[13px]">
+                                    ${detalle.precioUnitario.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums font-semibold text-[13px]">
+                                    ${detalle.importe.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Documentos */}
+                    <div className="space-y-3 pt-4 border-t border-line">
+                      <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3">Documentos disponibles</p>
+                      <div className="grid grid-cols-2 gap-3">
+                        {selectedInvoice.pdfUrl && (
+                          <Button variant="outline" className="justify-start h-auto p-4" asChild>
+                            <a href={selectedInvoice.pdfUrl} target="_blank" rel="noopener noreferrer">
+                              <div className="flex items-center gap-3 w-full">
+                                <div className="h-10 w-10 rounded-lg bg-wine-soft flex items-center justify-center flex-shrink-0">
+                                  <File className="h-5 w-5 text-wine" />
+                                </div>
+                                <div className="flex-1 text-left">
+                                  <p className="font-medium text-[13px]">Factura PDF</p>
+                                  <p className="text-[11px] text-ink-3">Representación impresa</p>
+                                </div>
+                                <Download className="h-4 w-4 text-ink-3" />
+                              </div>
+                            </a>
+                          </Button>
+                        )}
+                        {selectedInvoice.xmlUrl && (
+                          <Button variant="outline" className="justify-start h-auto p-4" asChild>
+                            <a href={selectedInvoice.xmlUrl} target="_blank" rel="noopener noreferrer">
+                              <div className="flex items-center gap-3 w-full">
+                                <div className="h-10 w-10 rounded-lg bg-moss-soft flex items-center justify-center flex-shrink-0">
+                                  <FileText className="h-5 w-5 text-moss" />
+                                </div>
+                                <div className="flex-1 text-left">
+                                  <p className="font-medium text-[13px]">CFDI XML</p>
+                                  <p className="text-[11px] text-ink-3">Comprobante fiscal</p>
+                                </div>
+                                <Download className="h-4 w-4 text-ink-3" />
+                              </div>
+                            </a>
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </TabsContent>
-
-              {/* Preview Tab */}
-              <TabsContent value="preview" className="flex-1 overflow-auto mt-4">
-                {selectedInvoice.pdfUrl ? (
-                  <div className="h-full min-h-[500px] border rounded-lg overflow-hidden bg-muted/20">
-                    <iframe
-                      src={selectedInvoice.pdfUrl}
-                      className="w-full h-full min-h-[500px]"
-                      title="Vista previa del PDF"
-                    />
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full min-h-[400px] border rounded-lg border-dashed">
-                    <div className="text-center text-muted-foreground">
-                      <File className="h-12 w-12 mx-auto mb-3 opacity-40" />
-                      <p className="font-medium">No hay vista previa disponible</p>
-                      <p className="text-sm mt-1">No se encontró un PDF para esta factura</p>
-                    </div>
-                  </div>
-                )}
-              </TabsContent>
-            </Tabs>
+              )}
+            </div>
           )}
         </DialogContent>
       </Dialog>

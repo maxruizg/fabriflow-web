@@ -16,12 +16,10 @@ import {
   uploadInvoiceXml,
   uploadPurchaseOrder,
   createInvoice,
-  uploadCompleteInvoice,
 } from "~/lib/api.server";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import type { InvoiceDetailBackend } from "~/types";
 import { cn } from "~/lib/utils";
-import { InvoiceUploadForm } from "~/components/invoices/invoice-upload-form";
 
 export const meta: MetaFunction = () => {
   return [
@@ -105,38 +103,6 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ success: true, ordenCompraUrl: result.url, valid: result.valid, message: result.message });
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Error al subir orden de compra" }, { status: 500 });
-    }
-  }
-
-  // New unified upload endpoint - uploads all 3 files and creates invoice in one operation
-  if (intent === "uploadComplete") {
-    const pdfFactura = formData.get("pdfFactura") as File;
-    const xmlFactura = formData.get("xmlFactura") as File;
-    const pdfOrden = formData.get("pdfOrden") as File;
-
-    // Validate all files are present
-    if (!pdfFactura || pdfFactura.size === 0) {
-      return json({ error: "PDF de factura es requerido" }, { status: 400 });
-    }
-    if (!xmlFactura || xmlFactura.size === 0) {
-      return json({ error: "XML CFDI es requerido" }, { status: 400 });
-    }
-    if (!pdfOrden || pdfOrden.size === 0) {
-      return json({ error: "PDF de orden de compra es requerido" }, { status: 400 });
-    }
-
-    try {
-      const result = await uploadCompleteInvoice(
-        session.accessToken,
-        user.company,
-        pdfFactura,
-        xmlFactura,
-        pdfOrden
-      );
-      return json({ success: true, invoice: result.invoice, validationDetails: result.validationDetails });
-    } catch (error) {
-      const err = error as Error;
-      return json({ error: err.message || "Error al cargar factura" }, { status: 500 });
     }
   }
 
@@ -290,52 +256,7 @@ function StepCard({ step, title, hint, done, icon, children }: StepCardProps) {
 
 // ---- Page component ----
 
-// New simplified component using unified upload
-function NewInvoiceSimplified() {
-  const { user } = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
-  const navigate = useNavigate();
-
-  // Redirect to invoices list after successful upload (with a small delay to show preview)
-  useEffect(() => {
-    if (actionData?.success) {
-      const timeout = setTimeout(() => {
-        navigate("/invoices?success=created");
-      }, 3000);
-      return () => clearTimeout(timeout);
-    }
-  }, [actionData?.success, navigate]);
-
-  return (
-    <AuthLayout>
-      <div className="max-w-6xl mx-auto py-6 space-y-5">
-        {/* Header */}
-        <div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate("/invoices")}
-            className="mb-2"
-          >
-            <Icon name="chevl" size={16} />
-          </Button>
-          <h1 className="ff-page-title">
-            Cargar <em>factura</em>
-          </h1>
-          <p className="ff-page-sub">
-            Seleccione los 3 archivos requeridos y el sistema validará automáticamente
-          </p>
-        </div>
-
-        {/* Upload form */}
-        <InvoiceUploadForm />
-      </div>
-    </AuthLayout>
-  );
-}
-
-// Old wizard component (keeping as fallback)
-function NewInvoiceOld() {
+export default function NewInvoice() {
   const { user } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
@@ -670,4 +591,3 @@ function NewInvoiceOld() {
     </AuthLayout>
   );
 }
-export default NewInvoiceSimplified;

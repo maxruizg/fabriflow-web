@@ -597,6 +597,62 @@ export async function uploadPurchaseOrder(
   return uploadFile<PurchaseOrderUploadResponse>('/api/uploads/upload/purchase-order', file, token, companyId);
 }
 
+/**
+ * Upload complete invoice with all 3 files: PDF factura, XML CFDI, PDF orden
+ * This is the unified endpoint that validates and creates the invoice in one operation
+ */
+export async function uploadCompleteInvoice(
+  token: string,
+  companyId: string,
+  pdfFactura: File,
+  xmlFactura: File,
+  pdfOrden: File
+): Promise<InvoiceUploadResponse> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/api/invoices/upload`;
+
+  const formData = new FormData();
+  formData.append('pdfFactura', pdfFactura);
+  formData.append('xmlFactura', xmlFactura);
+  formData.append('pdfOrden', pdfOrden);
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'X-Company-Id': companyId,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiServerError(
+      errorData.message || `Error uploading invoice: ${response.status}`,
+      response.status,
+      errorData.error
+    );
+  }
+
+  return response.json();
+}
+
+/**
+ * Response from complete invoice upload
+ */
+export interface InvoiceUploadResponse {
+  message: string;
+  invoice: import('~/types').InvoiceBackend;
+  validationDetails: {
+    xmlParsed: boolean;
+    uuidMatched: boolean;
+    rfcValidated: boolean;
+    fechaValidated: boolean;
+    ordenValidated: boolean;
+    filesUploaded: boolean;
+  };
+}
+
 // ============================================================================
 // Vendor Management API Functions
 // ============================================================================
