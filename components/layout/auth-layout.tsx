@@ -2,7 +2,7 @@ import { Form, Link, useLocation, useMatches } from "@remix-run/react";
 import { useState } from "react";
 
 import { useUser } from "~/lib/auth-context";
-import { RoleProvider, useRole } from "~/lib/role-context";
+import { useRole } from "~/lib/role-context";
 import { cn } from "~/lib/utils";
 import { Icon, type IconName } from "~/components/ui/icon";
 import { Button } from "~/components/ui/button";
@@ -82,10 +82,9 @@ function ctaForRoute(
   }
   // dashboard / vendors / users → role-based universal CTA
   if (pathname === "/dashboard") {
-    // Admins no tienen CTA en dashboard
     return role === "vendor"
       ? { label: "Subir factura", to: "/invoices/new", icon: "upload" }
-      : null;
+      : { label: "Nueva OC", to: "/orders/new", icon: "plus" };
   }
   // Default para otras rutas
   return role === "factory"
@@ -359,9 +358,9 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 export function AuthLayout({ children }: AuthLayoutProps) {
   return (
-    <RoleProvider>
+    <>
       <Shell>{children}</Shell>
       <TweaksPanel />
-    </RoleProvider>
+    </>
   );
 }

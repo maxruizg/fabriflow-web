@@ -352,6 +352,18 @@ import type {
 } from '~/types';
 
 /**
+ * The list endpoint returns SurrealDB record ids in the form `"invoice:abc123"`,
+ * but path-based endpoints (`GET /api/invoices/{id}`) expect the bare identifier.
+ * Strip the `"invoice:"` prefix and any SurrealDB angle-bracket escapes.
+ */
+function bareInvoiceId(id: string): string {
+  const trimmed = id.startsWith('invoice:') ? id.slice('invoice:'.length) : id;
+  const stripped = trimmed.replace(/[⟨⟩\\]/g, '');
+  console.log(`[bareInvoiceId] in="${id}" → out="${stripped}"`);
+  return stripped;
+}
+
+/**
  * Fetch invoices with filters and cursor-based pagination
  */
 export async function fetchInvoices(
@@ -430,7 +442,7 @@ export async function fetchInvoice(
   invoiceId: string
 ): Promise<InvoiceBackend> {
   return apiRequest<InvoiceBackend>(
-    `/api/invoices/${invoiceId}`,
+    `/api/invoices/${encodeURIComponent(bareInvoiceId(invoiceId))}`,
     {
       method: 'GET',
       headers: {
@@ -472,7 +484,7 @@ export async function updateInvoiceStatus(
   estado: InvoiceStatus
 ): Promise<InvoiceBackend> {
   return apiRequest<InvoiceBackend>(
-    `/api/invoices/${invoiceId}/status`,
+    `/api/invoices/${encodeURIComponent(bareInvoiceId(invoiceId))}/status`,
     {
       method: 'PUT',
       headers: {
@@ -493,7 +505,7 @@ export async function deleteInvoice(
   invoiceId: string
 ): Promise<{ message: string; invoiceId: string }> {
   return apiRequest<{ message: string; invoiceId: string }>(
-    `/api/invoices/${invoiceId}/delete`,
+    `/api/invoices/${encodeURIComponent(bareInvoiceId(invoiceId))}/delete`,
     {
       method: 'POST',
       headers: {
@@ -505,6 +517,53 @@ export async function deleteInvoice(
 }
 
 /**
+ * Find prev/next invoice ids for a given invoice within the current filter context.
+ * Walks the cursor-paginated list (capped) until the target is located, then returns
+ * its neighbors. If the target isn't found within the cap, returns nulls.
+ */
+export async function fetchInvoiceNeighbors(
+  token: string,
+  companyId: string,
+  invoiceId: string,
+  filters: InvoiceFiltersBackend,
+  isAdmin: boolean,
+  options: { maxPages?: number; pageSize?: number } = {}
+): Promise<{ prevId: string | null; nextId: string | null }> {
+  const maxPages = options.maxPages ?? 5;
+  const pageSize = options.pageSize ?? 100;
+  const list = isAdmin ? fetchAllInvoices : fetchInvoices;
+
+  const collected: { id: string }[] = [];
+  let cursor: string | undefined = filters.cursor;
+  const targetBare = bareInvoiceId(invoiceId);
+  const matches = (inv: { id: string }) => bareInvoiceId(inv.id) === targetBare;
+
+  for (let page = 0; page < maxPages; page++) {
+    const response = await list(token, companyId, { ...filters, cursor, limit: pageSize });
+    collected.push(...response.data);
+
+    const idx = collected.findIndex(matches);
+    if (idx !== -1) {
+      const prev = collected[idx - 1];
+      const next = collected[idx + 1];
+      if (next || !response.hasMore) {
+        return { prevId: prev?.id ?? null, nextId: next?.id ?? null };
+      }
+    }
+
+    if (!response.hasMore || !response.nextCursor) break;
+    cursor = response.nextCursor;
+  }
+
+  const idx = collected.findIndex(matches);
+  if (idx === -1) return { prevId: null, nextId: null };
+  return {
+    prevId: collected[idx - 1]?.id ?? null,
+    nextId: collected[idx + 1]?.id ?? null,
+  };
+}
+
+/**
  * Get invoice PDF/XML URLs
  */
 export async function fetchInvoiceUrls(
@@ -513,7 +572,7 @@ export async function fetchInvoiceUrls(
   invoiceId: string
 ): Promise<InvoiceUrlsResponse> {
   return apiRequest<InvoiceUrlsResponse>(
-    `/api/invoices/${invoiceId}/urls`,
+    `/api/invoices/${encodeURIComponent(bareInvoiceId(invoiceId))}/urls`,
     {
       method: 'GET',
       headers: {
@@ -606,7 +665,8 @@ export async function uploadCompleteInvoice(
   companyId: string,
   pdfFactura: File,
   xmlFactura: File,
-  pdfOrden: File
+  pdfOrden: File,
+  orderId?: string
 ): Promise<InvoiceUploadResponse> {
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}/api/invoices/upload`;
@@ -615,6 +675,7 @@ export async function uploadCompleteInvoice(
   formData.append('pdfFactura', pdfFactura);
   formData.append('xmlFactura', xmlFactura);
   formData.append('pdfOrden', pdfOrden);
+  if (orderId) formData.append('orderId', orderId);
 
   const response = await fetch(url, {
     method: 'POST',
@@ -650,6 +711,21 @@ export interface InvoiceUploadResponse {
     fechaValidated: boolean;
     ordenValidated: boolean;
     filesUploaded: boolean;
+  };
+  matchReport?: {
+    overall: 'ok' | 'warning' | 'mismatch';
+    fields: Array<{
+      field: string;
+      verdict: 'ok' | 'warning' | 'mismatch';
+      expected: string;
+      actual: string;
+      message: string | null;
+    }>;
+    mismatchesCount: number;
+    warningsCount: number;
+    matchedLines: number;
+    unmatchedInvoiceLines: number;
+    unmatchedOrderLines: number;
   };
 }
 

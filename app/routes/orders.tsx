@@ -4,19 +4,33 @@ import type {
   MetaFunction,
 } from "@remix-run/cloudflare";
 import { json } from "@remix-run/cloudflare";
-import { useLoaderData } from "@remix-run/react";
+import {
+  useLoaderData,
+  useRouteError,
+  isRouteErrorResponse,
+} from "@remix-run/react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
+import {
+  ErrorScreen,
+  type ErrorScreenAction,
+} from "~/components/ui/error-screen";
 
-import { requireUser } from "~/lib/session.server";
+import { requireUser, getFullSession } from "~/lib/session.server";
 import { useUser } from "~/lib/auth-context";
 import { useRole } from "~/lib/role-context";
 import { cn } from "~/lib/utils";
 import {
-  SAMPLE_ORDERS,
+  fetchOrders,
+  type OrderBackend,
+  type OrderStatusBackend,
+} from "~/lib/procurement-api.server";
+import {
   fmtCurrency,
   fmtDate,
   STATUS_TONE,
   type SampleOrder,
 } from "~/lib/sample-data";
+import type { DocType } from "~/components/ui/doc-chip";
 
 import { AuthLayout } from "~/components/layout/auth-layout";
 import { Badge } from "~/components/ui/badge";
@@ -61,14 +75,81 @@ export const handle = {
   crumb: ["Operación", "Órdenes"],
 };
 
+// SurrealId values (e.g. "company:abc") arrive prefixed; strip for display + ids.
+function stripPrefix(id: string, table: string): string {
+  const prefix = `${table}:`;
+  const trimmed = id.startsWith(prefix) ? id.slice(prefix.length) : id;
+  return trimmed.replace(/[⟨⟩\\]/g, "");
+}
+
+const STATUS_LABEL: Record<OrderStatusBackend, string> = {
+  recibido: "Recibido",
+  en_transito: "En tránsito",
+  confirmado: "Confirmado",
+  revision_calidad: "Revisión calidad",
+  cerrado: "Cerrado",
+  incidencia: "Incidencia",
+  pendiente_conf: "Pendiente conf.",
+  rechazado: "Rechazado",
+};
+
+const CURRENCY_FALLBACK: SampleOrder["cur"] = "MXN";
+function normalizeCurrency(c: string): SampleOrder["cur"] {
+  if (c === "USD" || c === "EUR" || c === "MXN") return c;
+  return CURRENCY_FALLBACK;
+}
+
+function toSampleShape(o: OrderBackend): SampleOrder {
+  const docs: DocType[] = [];
+  if (o.docState.ocUrl) docs.push("OC");
+  if (o.docState.facInvoiceId) docs.push("FAC");
+  if (o.docState.remUrl) docs.push("REM");
+  if (o.docState.ncUrl) docs.push("NC");
+
+  // The vendor field is a SurrealId reference. Until a vendor-name join lands
+  // on the backend, use the bare id for both the display label and the filter
+  // key. The dropdown will still group orders by vendor correctly.
+  const vendorId = stripPrefix(o.vendor, "company");
+
+  return {
+    id: stripPrefix(o.id, "order"),
+    vendor: vendorId,
+    vendorId,
+    date: o.date,
+    due: o.due ?? "",
+    amount: o.amount,
+    cur: normalizeCurrency(o.currency),
+    status: STATUS_LABEL[o.status] ?? o.status,
+    items: o.itemsCount,
+    docs,
+  };
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
-  // Backend is ready (`be-v2/src/api/orders.rs`). To swap from sample data:
-  //   1. const { fetchOrders } = await import("~/lib/procurement-api.server");
-  //   2. const session = await getFullSession(request);
-  //   3. const r = await fetchOrders(session.accessToken, user.company, { limit: 50 });
-  //   4. return json({ orders: r.data.map(toSampleShape) });
-  await requireUser(request);
-  return json({ orders: SAMPLE_ORDERS });
+  const user = await requireUser(request);
+  const session = await getFullSession(request);
+
+  if (!session?.accessToken || !user.company) {
+    return json({ orders: [] as SampleOrder[] });
+  }
+
+  try {
+    const response = await fetchOrders(session.accessToken, user.company, {
+      limit: 50,
+    });
+    return json({ orders: response.data.map(toSampleShape) });
+  } catch (error) {
+    console.error("[orders] fetchOrders failed:", error);
+    const status =
+      typeof error === "object" && error !== null && "status" in error
+        ? Number((error as { status: unknown }).status) || 500
+        : 500;
+    const message =
+      error instanceof Error
+        ? error.message
+        : "No se pudieron cargar las órdenes";
+    throw new Response(message, { status });
+  }
 }
 
 type StatusFilter = "all" | "open" | "transit" | "review" | "incident" | "closed";
@@ -341,6 +422,65 @@ export default function OrdersPage() {
             </div>
           </TabsContent>
         </Tabs>
+      </div>
+    </AuthLayout>
+  );
+}
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+  const isResponse = isRouteErrorResponse(error);
+  const status = isResponse ? error.status : 500;
+  const message = isResponse
+    ? typeof error.data === "string"
+      ? error.data
+      : error.statusText
+    : error instanceof Error
+      ? error.message
+      : "Error inesperado";
+
+  const titleByStatus: Record<number, string> = {
+    401: "Tu sesión ya no es válida.",
+    403: "No tienes permisos para ver órdenes.",
+    404: "No encontramos órdenes.",
+    500: "Algo se rompió al cargar las órdenes.",
+  };
+  const descriptionByStatus: Record<number, string> = {
+    401: "Inicia sesión nuevamente para continuar.",
+    403: "Pide a un administrador que ajuste tus permisos.",
+    404: "Verifica el enlace o vuelve al inicio.",
+    500: "Vuelve a intentarlo en unos segundos. Si persiste, revisa la consola para más detalles.",
+  };
+
+  const actions: ErrorScreenAction[] = [
+    {
+      label: "Volver al inicio",
+      href: "/dashboard",
+      variant: "clay",
+      icon: <ArrowLeft className="h-3.5 w-3.5" />,
+    },
+    {
+      label: "Reintentar",
+      onClick: () => {
+        if (typeof window !== "undefined") window.location.reload();
+      },
+      variant: "outline",
+      icon: <RefreshCw className="h-3.5 w-3.5" />,
+    },
+  ];
+
+  return (
+    <AuthLayout>
+      <div className="h-[calc(100vh-8rem)]">
+        <ErrorScreen
+          status={status}
+          title={titleByStatus[status]}
+          description={descriptionByStatus[status]}
+          detail={message && message !== titleByStatus[status] ? message : undefined}
+          actions={actions}
+          fullScreen={false}
+          className="h-full"
+        />
       </div>
     </AuthLayout>
   );

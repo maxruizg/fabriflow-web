@@ -36,6 +36,17 @@ export interface OrderEvent {
   actor: string | null;
 }
 
+export interface OrderItem {
+  lineNo: number;
+  sku?: string | null;
+  description: string;
+  qty: number;
+  unit: string;
+  unitPrice: number;
+  discount: number;
+  lineTotal: number;
+}
+
 export interface OrderBackend {
   id: string;
   company: string;
@@ -46,11 +57,86 @@ export interface OrderBackend {
   amount: number;
   currency: string;
   itemsCount: number;
+  items?: OrderItem[];
+  notes?: string | null;
+  paymentTerms?: string | null;
+  deliveryAddress?: string | null;
   status: OrderStatusBackend;
   docState: OrderDocState;
   history: OrderEvent[];
+  sentAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CreateOrderItemPayload {
+  description: string;
+  sku?: string;
+  qty: number;
+  unit?: string;
+  unitPrice: number;
+  discount?: number;
+}
+
+export interface CreateOrderPayload {
+  vendor: string;
+  folio: string;
+  date: string;
+  due?: string;
+  currency: string;
+  items: CreateOrderItemPayload[];
+  notes?: string;
+  paymentTerms?: string;
+  deliveryAddress?: string;
+}
+
+export interface CreateOrderResponse {
+  order: OrderBackend;
+  shareToken: string;
+}
+
+export interface SendOrderRecipients {
+  email?: string;
+  whatsapp?: string;
+}
+
+export interface SendOrderPayload {
+  channels: ("email" | "whatsapp")[];
+  to?: SendOrderRecipients;
+  message?: string;
+  regeneratePdf?: boolean;
+}
+
+export interface SendChannelResult {
+  channel: string;
+  ok: boolean;
+  messageId?: string | null;
+  error?: string | null;
+}
+
+export interface SendOrderResponse {
+  results: SendChannelResult[];
+  pdfUrl: string;
+  publicUrl: string;
+}
+
+export interface PublicOrderResponse {
+  order: {
+    id: string;
+    folio: string;
+    date: string;
+    due: string | null;
+    amount: number;
+    currency: string;
+    items: OrderItem[];
+    notes: string | null;
+    paymentTerms: string | null;
+    deliveryAddress: string | null;
+    status: OrderStatusBackend;
+    ocUrl: string | null;
+  };
+  buyer: { name: string; rfc: string };
+  vendor: { name: string; rfc: string; email: string };
 }
 
 export interface OrderListFilters {
@@ -233,6 +319,87 @@ export function fetchOrder(
 ): Promise<OrderBackend> {
   return apiRequest<OrderBackend>(
     `/api/orders/${encodeURIComponent(id)}`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
+export function createOrder(
+  token: string,
+  companyId: string,
+  payload: CreateOrderPayload,
+): Promise<CreateOrderResponse> {
+  return apiRequest<CreateOrderResponse>(
+    `/api/orders`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
+export function sendOrder(
+  token: string,
+  companyId: string,
+  orderId: string,
+  payload: SendOrderPayload,
+): Promise<SendOrderResponse> {
+  return apiRequest<SendOrderResponse>(
+    `/api/orders/${encodeURIComponent(orderId)}/send`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
+export function fetchOrderPdfUrl(
+  token: string,
+  companyId: string,
+  orderId: string,
+): Promise<{ url: string }> {
+  return apiRequest<{ url: string }>(
+    `/api/orders/${encodeURIComponent(orderId)}/pdf`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
+/** Public landing — no auth header, validates by share token. */
+export function fetchPublicOrder(token: string): Promise<PublicOrderResponse> {
+  return apiRequest<PublicOrderResponse>(
+    `/api/public/orders/${encodeURIComponent(token)}`,
+    {},
+  );
+}
+
+export interface ActiveVendorSummary {
+  id: string;
+  name: string;
+  rfc: string;
+  email: string;
+  phone: string | null;
+  whatsappPhone: string | null;
+}
+
+export function fetchActiveVendors(
+  token: string,
+  companyId: string,
+): Promise<ActiveVendorSummary[]> {
+  return apiRequest<ActiveVendorSummary[]>(
+    `/api/vendors/active`,
     withCompanyHeader(token, companyId),
     token,
   );

@@ -46,10 +46,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return redirect("/invoices");
   }
 
+  const url = new URL(request.url);
+  const orderId = url.searchParams.get("orderId");
+
   return json({
     user,
     companyId: user.company,
     token: session.accessToken,
+    orderId,
   });
 }
 
@@ -125,15 +129,26 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ error: "PDF de orden de compra es requerido" }, { status: 400 });
     }
 
+    const orderIdField = formData.get("orderId");
+    const orderId = typeof orderIdField === "string" && orderIdField.trim().length > 0
+      ? orderIdField.trim()
+      : undefined;
+
     try {
       const result = await uploadCompleteInvoice(
         session.accessToken,
         user.company,
         pdfFactura,
         xmlFactura,
-        pdfOrden
+        pdfOrden,
+        orderId,
       );
-      return json({ success: true, invoice: result.invoice, validationDetails: result.validationDetails });
+      return json({
+        success: true,
+        invoice: result.invoice,
+        validationDetails: result.validationDetails,
+        matchReport: result.matchReport,
+      });
     } catch (error) {
       const err = error as Error;
       return json({ error: err.message || "Error al cargar factura" }, { status: 500 });
@@ -292,7 +307,7 @@ function StepCard({ step, title, hint, done, icon, children }: StepCardProps) {
 
 // New simplified component using unified upload
 function NewInvoiceSimplified() {
-  const { user } = useLoaderData<typeof loader>();
+  const { user, orderId } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
 
@@ -328,7 +343,7 @@ function NewInvoiceSimplified() {
         </div>
 
         {/* Upload form */}
-        <InvoiceUploadForm />
+        <InvoiceUploadForm orderId={orderId ?? undefined} />
       </div>
     </AuthLayout>
   );

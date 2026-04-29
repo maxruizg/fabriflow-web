@@ -12,11 +12,15 @@ import {
   ScrollRestoration,
   useLoaderData,
   useRouteLoaderData,
+  useRouteError,
+  isRouteErrorResponse,
 } from "@remix-run/react";
 import { json } from "@remix-run/cloudflare";
 import { AuthProvider } from "~/lib/auth-context";
 import { ThemeProvider } from "~/lib/theme-context";
+import { RoleProvider } from "~/lib/role-context";
 import { getUserFromSession } from "~/lib/session.server";
+import { ErrorScreen } from "~/components/ui/error-screen";
 import {
   getThemePrefs,
   setThemePrefsCookie,
@@ -172,8 +176,45 @@ export default function App() {
   return (
     <ThemeProvider defaultPrefs={themePrefs}>
       <AuthProvider user={user}>
-        <Outlet />
+        <RoleProvider>
+          <Outlet />
+        </RoleProvider>
       </AuthProvider>
     </ThemeProvider>
+  );
+}
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+  const isResponse = isRouteErrorResponse(error);
+  const status = isResponse ? error.status : 500;
+  const detail = isResponse
+    ? typeof error.data === "string" && error.data.length > 0
+      ? error.data
+      : error.statusText
+    : error instanceof Error
+      ? error.message
+      : undefined;
+
+  return (
+    <ErrorScreen
+      status={status}
+      detail={detail}
+      fullScreen
+      actions={[
+        {
+          label: "Ir al inicio",
+          href: "/",
+          variant: "clay",
+        },
+        {
+          label: "Reintentar",
+          variant: "outline",
+          onClick: () => {
+            if (typeof window !== "undefined") window.location.reload();
+          },
+        },
+      ]}
+    />
   );
 }

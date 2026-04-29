@@ -24,18 +24,37 @@ export interface InvoiceUploadActionData {
     ordenValidated: boolean;
     filesUploaded: boolean;
   };
+  matchReport?: MatchReportShape;
+}
+
+export interface MatchReportShape {
+  overall: "ok" | "warning" | "mismatch";
+  fields: Array<{
+    field: string;
+    verdict: "ok" | "warning" | "mismatch";
+    expected: string;
+    actual: string;
+    message: string | null;
+  }>;
+  mismatchesCount: number;
+  warningsCount: number;
+  matchedLines: number;
+  unmatchedInvoiceLines: number;
+  unmatchedOrderLines: number;
 }
 
 export interface InvoiceUploadFormProps {
   /** Additional CSS class */
   className?: string;
+  /** Optional order id to validate this invoice against. */
+  orderId?: string | null;
 }
 
 /**
  * Complete invoice upload form with 3 file inputs and single submit button.
  * Uses Remix Form with server-side processing for proper SSR and progressive enhancement.
  */
-export function InvoiceUploadForm({ className }: InvoiceUploadFormProps) {
+export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps) {
   // Remix hooks
   const navigation = useNavigation();
   const actionData = useActionData<InvoiceUploadActionData>();
@@ -175,6 +194,17 @@ export function InvoiceUploadForm({ className }: InvoiceUploadFormProps) {
     <div className={cn("space-y-6", className)}>
       <Form method="post" encType="multipart/form-data" onSubmit={handleSubmit}>
         <input type="hidden" name="intent" value="uploadComplete" />
+        {orderId ? <input type="hidden" name="orderId" value={orderId} /> : null}
+        {orderId ? (
+          <div className="mb-4 rounded-md border border-clay bg-clay-soft px-3 py-2 text-[12.5px] text-clay-deep">
+            <span className="font-medium">Vinculando a orden:</span>{" "}
+            <span className="font-mono">{orderId}</span>
+            <span className="ml-2 text-ink-3">
+              (los datos del CFDI se compararán contra esta OC)
+            </span>
+          </div>
+        ) : null}
+        {actionData?.matchReport ? <MatchReportPanel report={actionData.matchReport} /> : null}
 
         {/* File inputs */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -281,6 +311,51 @@ export function InvoiceUploadForm({ className }: InvoiceUploadFormProps) {
       {actionData?.success && actionData.invoice && !isSubmitting && (
         <InvoiceDataPreview invoice={actionData.invoice} />
       )}
+    </div>
+  );
+}
+
+function MatchReportPanel({ report }: { report: MatchReportShape }) {
+  const toneByOverall = {
+    ok: { border: "border-moss", bg: "bg-moss-soft", text: "text-moss-deep", icon: "check" as const, title: "Coincide con la OC" },
+    warning: { border: "border-rust", bg: "bg-rust-soft", text: "text-rust-deep", icon: "warn" as const, title: "Coincide con observaciones" },
+    mismatch: { border: "border-wine", bg: "bg-wine-soft", text: "text-wine-deep", icon: "warn" as const, title: "Datos no coinciden" },
+  }[report.overall];
+
+  const verdictTone = (v: "ok" | "warning" | "mismatch") =>
+    v === "ok"
+      ? "text-moss-deep"
+      : v === "warning"
+      ? "text-rust-deep"
+      : "text-wine-deep";
+
+  return (
+    <div className={cn("mb-5 rounded-md border px-4 py-3", toneByOverall.border, toneByOverall.bg)}>
+      <div className={cn("flex items-center gap-2 font-medium text-[13px]", toneByOverall.text)}>
+        <Icon name={toneByOverall.icon} size={14} />
+        {toneByOverall.title}
+      </div>
+      <div className="mt-1 text-[11.5px] text-ink-3 font-mono">
+        {report.matchedLines} línea{report.matchedLines === 1 ? "" : "s"} match · {report.warningsCount} aviso(s) · {report.mismatchesCount} error(es)
+      </div>
+      <ul className="mt-3 space-y-1.5">
+        {report.fields.map((f, i) => (
+          <li key={`${f.field}-${i}`} className="flex items-start gap-2 text-[12.5px]">
+            <span className={cn("font-mono mt-0.5", verdictTone(f.verdict))}>
+              {f.verdict === "ok" ? "✓" : f.verdict === "warning" ? "!" : "✗"}
+            </span>
+            <span className="flex-1">
+              <span className="font-medium text-ink">{f.field}</span>
+              {f.message ? <span className="text-ink-2"> — {f.message}</span> : null}
+              {f.verdict !== "ok" ? (
+                <span className="ml-1 font-mono text-ink-3">
+                  (esperado <strong>{f.expected}</strong>, factura <strong>{f.actual}</strong>)
+                </span>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
