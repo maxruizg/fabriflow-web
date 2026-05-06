@@ -159,7 +159,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="color-scheme" content="light dark" />
         <Meta />
         <Links />
-        <script>{NO_FLASH_SCRIPT}</script>
+        <script dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }} />
       </head>
       <body className={bodyClasses(prefs)}>
         {children}

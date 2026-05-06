@@ -54,6 +54,55 @@ export function InvoiceDataPreview({
         </div>
       </div>
 
+      {/* Amount variance warning (if applicable) */}
+      {invoice.amountVariance !== undefined && invoice.amountVariance > 0 && (
+        <div
+          className={cn(
+            "flex items-start gap-3 p-4 rounded-lg border",
+            invoice.amountVariance > 5
+              ? "bg-wine-soft border-wine"
+              : "bg-rust-soft border-rust"
+          )}
+        >
+          <Icon
+            name="warn"
+            size={20}
+            className={cn(
+              "flex-shrink-0 mt-0.5",
+              invoice.amountVariance > 5 ? "text-wine-deep" : "text-rust-deep"
+            )}
+          />
+          <div>
+            <div
+              className={cn(
+                "text-sm font-medium",
+                invoice.amountVariance > 5 ? "text-wine-deep" : "text-rust-deep"
+              )}
+            >
+              {invoice.amountVariance > 5
+                ? "Diferencia significativa con la orden de compra"
+                : "Diferencia menor con la orden de compra"}
+            </div>
+            <div className="text-xs text-ink-3 mt-1">
+              El total de la factura difiere en{" "}
+              <span className="font-semibold">
+                {invoice.amountVariance.toFixed(2)}%
+              </span>{" "}
+              del monto de la orden de compra
+              {invoice.orderFolio && (
+                <span className="ml-1 font-mono">({invoice.orderFolio})</span>
+              )}
+              .
+              {invoice.amountVariance > 5 && (
+                <span className="block mt-1 text-xs">
+                  Por favor verifica que los montos sean correctos.
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main info */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Left column */}

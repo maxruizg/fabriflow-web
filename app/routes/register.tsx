@@ -216,10 +216,12 @@ export default function Register() {
     setValue,
     setError,
     clearErrors,
+    getValues,
   } = useForm<RegisterFormData>({
     resolver: zodResolver(registerSchema),
-    mode: "onTouched",
+    mode: "onChange",
     defaultValues: fetcher.data?.values || { companyType: "company" },
+    shouldUnregister: false,
   });
 
   const currentCompanyType = watch("companyType") || "company";
@@ -297,19 +299,24 @@ export default function Register() {
   ]);
 
   const handleCSFDataExtracted = (data: CSFData) => {
+    console.log("📄 CSF Data extracted:", data);
     if (data.rfc) {
-      setValue("rfc", data.rfc.toUpperCase(), { shouldValidate: true });
+      setValue("rfc", data.rfc.toUpperCase(), { shouldValidate: true, shouldDirty: true, shouldTouch: true });
+      console.log("✅ RFC set to:", data.rfc.toUpperCase());
     }
 
     if (data.nombre) {
       if (currentProviderType === "personal") {
-        setValue("providerCompany", data.nombre, { shouldValidate: true });
+        setValue("providerCompany", data.nombre, { shouldValidate: true, shouldDirty: true, shouldTouch: true });
+        console.log("✅ Provider name set to:", data.nombre);
       } else if (currentProviderType === "legal") {
-        setValue("vendorLegalName", data.nombre, { shouldValidate: true });
+        setValue("vendorLegalName", data.nombre, { shouldValidate: true, shouldDirty: true, shouldTouch: true });
+        console.log("✅ Vendor legal name set to:", data.nombre);
       }
     }
 
     setCsfExtracted(true);
+    console.log("📋 Form values after CSF:", getValues());
   };
 
   const validateCurrentStep = async () => {
@@ -389,7 +396,10 @@ export default function Register() {
     if (isStepValid) {
       clearErrors();
       setValidationErrors([]);
-      setCurrentStep((prev) => Math.min(prev + 1, totalSteps));
+      const newStep = Math.min(currentStep + 1, totalSteps);
+      console.log(`➡️ Moving to step ${newStep}`);
+      console.log("📋 Form values before step change:", getValues());
+      setCurrentStep(newStep);
     }
   };
 
@@ -400,6 +410,7 @@ export default function Register() {
   };
 
   const onSubmit = (data: RegisterFormData) => {
+    console.log("✅ Form submitted with data:", data);
     const formData = new FormData();
     Object.entries(data).forEach(([key, value]) => {
       formData.append(key, value);
@@ -410,15 +421,18 @@ export default function Register() {
 
   const onError = (errs: unknown) => {
     console.log("Form validation errors:", errs);
+    console.log("📝 Current form values:", watch());
 
     const errorMessages: string[] = [];
     Object.entries(errs as Record<string, { message?: string }>).forEach(
       ([field, error]) => {
+        console.log(`❌ Field "${field}":`, error?.message || error);
         if (error?.message) {
           errorMessages.push(`${field}: ${error.message}`);
         }
       },
     );
+    console.log("📋 Total validation errors:", errorMessages);
     setValidationErrors(errorMessages);
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -852,7 +866,12 @@ export default function Register() {
                         </Label>
                         <Input
                           id="providerCompany"
-                          {...register("providerCompany")}
+                          {...register("providerCompany", {
+                            onChange: (e) => {
+                              console.log("👤 Provider name input changed:", e.target.value);
+                              console.log("📋 Form values after name input:", getValues());
+                            }
+                          })}
                           type="text"
                           placeholder="Nombre completo como aparece en tu Constancia"
                           className="h-10 text-sm"
@@ -922,9 +941,11 @@ export default function Register() {
                         Empresa cliente *
                       </Label>
                       <Select
-                        onValueChange={(value) =>
-                          setValue("company", value)
-                        }
+                        onValueChange={(value) => {
+                          console.log("🏢 Company selected:", value);
+                          setValue("company", value, { shouldValidate: true, shouldDirty: true, shouldTouch: true });
+                          console.log("📋 Form values after company select:", getValues());
+                        }}
                         value={watch("company") || ""}
                       >
                         <SelectTrigger id="company-select" className="h-10 text-sm">
@@ -1022,7 +1043,12 @@ export default function Register() {
                       </Label>
                       <Input
                         id="rfc"
-                        {...register("rfc")}
+                        {...register("rfc", {
+                          onChange: (e) => {
+                            console.log("🆔 RFC input changed:", e.target.value);
+                            console.log("📋 Form values after RFC input:", getValues());
+                          }
+                        })}
                         type="text"
                         placeholder="ABC123456XYZ"
                         className={cn(
@@ -1048,7 +1074,12 @@ export default function Register() {
                       </Label>
                       <Input
                         id="phone"
-                        {...register("phone")}
+                        {...register("phone", {
+                          onChange: (e) => {
+                            console.log("📞 Phone input changed:", e.target.value);
+                            console.log("📋 Form values after phone input:", getValues());
+                          }
+                        })}
                         type="tel"
                         placeholder="5512345678"
                         className="h-10 text-sm"
@@ -1073,8 +1104,7 @@ export default function Register() {
                 </Alert>
               )}
 
-              {validationErrors.length > 0 &&
-                stepValidationAttempted[currentStep] && (
+              {validationErrors.length > 0 && (
                   <Alert className="bg-wine-soft border-wine/20">
                     <Icon name="warn" size={14} className="text-wine" />
                     <AlertDescription className="text-[12px] text-wine">

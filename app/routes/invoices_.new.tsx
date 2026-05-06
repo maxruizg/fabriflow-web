@@ -18,6 +18,7 @@ import {
   createInvoice,
   uploadCompleteInvoice,
 } from "~/lib/api.server";
+import { getAvailableOrdersForInvoice } from "~/lib/procurement-api.server";
 import { useState, useCallback, useEffect } from "react";
 import type { InvoiceDetailBackend } from "~/types";
 import { cn } from "~/lib/utils";
@@ -49,11 +50,19 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const orderId = url.searchParams.get("orderId");
 
+  // Obtener órdenes de compra disponibles para facturar
+  const availableOrders = await getAvailableOrdersForInvoice(
+    session.accessToken,
+    user.company,
+    user.company  // vendorId = company del usuario vendor
+  );
+
   return json({
     user,
     companyId: user.company,
     token: session.accessToken,
     orderId,
+    availableOrders,
   });
 }
 
@@ -112,27 +121,23 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   }
 
-  // New unified upload endpoint - uploads all 3 files and creates invoice in one operation
+  // New unified upload endpoint - uploads 2 files (PDF + XML) and creates invoice linked to purchase order
   if (intent === "uploadComplete") {
     const pdfFactura = formData.get("pdfFactura") as File;
     const xmlFactura = formData.get("xmlFactura") as File;
-    const pdfOrden = formData.get("pdfOrden") as File;
+    const pdfOrden = formData.get("pdfOrden") as File | null;  // Opcional (deprecated)
+    const purchaseOrderId = formData.get("purchaseOrderId") as string;
 
-    // Validate all files are present
+    // Validate required fields
     if (!pdfFactura || pdfFactura.size === 0) {
       return json({ error: "PDF de factura es requerido" }, { status: 400 });
     }
     if (!xmlFactura || xmlFactura.size === 0) {
       return json({ error: "XML CFDI es requerido" }, { status: 400 });
     }
-    if (!pdfOrden || pdfOrden.size === 0) {
-      return json({ error: "PDF de orden de compra es requerido" }, { status: 400 });
+    if (!purchaseOrderId || purchaseOrderId.trim().length === 0) {
+      return json({ error: "Orden de compra es requerida" }, { status: 400 });
     }
-
-    const orderIdField = formData.get("orderId");
-    const orderId = typeof orderIdField === "string" && orderIdField.trim().length > 0
-      ? orderIdField.trim()
-      : undefined;
 
     try {
       const result = await uploadCompleteInvoice(
@@ -140,8 +145,8 @@ export async function action({ request }: ActionFunctionArgs) {
         user.company,
         pdfFactura,
         xmlFactura,
-        pdfOrden,
-        orderId,
+        purchaseOrderId,
+        pdfOrden && pdfOrden.size > 0 ? pdfOrden : undefined,
       );
       return json({
         success: true,
@@ -307,7 +312,7 @@ function StepCard({ step, title, hint, done, icon, children }: StepCardProps) {
 
 // New simplified component using unified upload
 function NewInvoiceSimplified() {
-  const { user, orderId } = useLoaderData<typeof loader>();
+  const { user, orderId, availableOrders } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
 
@@ -338,12 +343,15 @@ function NewInvoiceSimplified() {
             Cargar <em>factura</em>
           </h1>
           <p className="ff-page-sub">
-            Seleccione los 3 archivos requeridos y el sistema validará automáticamente
+            Seleccione la orden de compra y los archivos de factura (PDF + XML)
           </p>
         </div>
 
         {/* Upload form */}
-        <InvoiceUploadForm orderId={orderId ?? undefined} />
+        <InvoiceUploadForm
+          orderId={orderId ?? undefined}
+          availableOrders={availableOrders}
+        />
       </div>
     </AuthLayout>
   );

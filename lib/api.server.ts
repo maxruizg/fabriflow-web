@@ -665,8 +665,8 @@ export async function uploadCompleteInvoice(
   companyId: string,
   pdfFactura: File,
   xmlFactura: File,
-  pdfOrden: File,
-  orderId?: string
+  purchaseOrderId: string,  // REQUERIDO en nuevo flujo
+  pdfOrden?: File  // Opcional (deprecated)
 ): Promise<InvoiceUploadResponse> {
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}/api/invoices/upload`;
@@ -674,8 +674,8 @@ export async function uploadCompleteInvoice(
   const formData = new FormData();
   formData.append('pdfFactura', pdfFactura);
   formData.append('xmlFactura', xmlFactura);
-  formData.append('pdfOrden', pdfOrden);
-  if (orderId) formData.append('orderId', orderId);
+  formData.append('purchaseOrderId', purchaseOrderId);
+  if (pdfOrden) formData.append('pdfOrden', pdfOrden);
 
   const response = await fetch(url, {
     method: 'POST',

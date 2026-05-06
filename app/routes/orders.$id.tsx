@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/cloudflare";
+import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from "@remix-run/cloudflare";
 import { json, redirect } from "@remix-run/cloudflare";
 import { Link, useLoaderData, useSearchParams } from "@remix-run/react";
 
 import { getFullSession, requireUser } from "~/lib/session.server";
+import { useUser } from "~/lib/auth-context";
 import {
+  authorizeOrder,
   fetchActiveVendors,
   fetchOrder,
   type ActiveVendorSummary,
@@ -18,6 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Icon } from "~/components/ui/icon";
 import { Separator } from "~/components/ui/separator";
 import { SendOrderDialog } from "~/components/orders/send-order-dialog";
+import { AuthorizeOrderDialog } from "~/components/orders/authorize-order-dialog";
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => {
   const folio = data && "order" in data ? data.order.folio : "Orden";
@@ -31,6 +34,45 @@ export const handle = {
 interface LoaderData {
   order: OrderBackend;
   vendor: ActiveVendorSummary | null;
+}
+
+export async function action({ request, params }: ActionFunctionArgs) {
+  const session = await getFullSession(request);
+  if (!session?.accessToken || !session.user.company) {
+    throw redirect("/login");
+  }
+
+  const id = params.id;
+  if (!id) throw redirect("/orders");
+
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "authorize") {
+    const approve = formData.get("approve") === "true";
+    const rejectionReason = formData.get("rejectionReason") as string | undefined;
+
+    try {
+      await authorizeOrder(
+        session.accessToken,
+        session.user.company,
+        id,
+        { approve, rejectionReason }
+      );
+
+      return json({ ok: true });
+    } catch (error) {
+      return json(
+        {
+          ok: false,
+          error: error instanceof Error ? error.message : "Error al autorizar orden",
+        },
+        { status: 400 }
+      );
+    }
+  }
+
+  return json({ ok: false, error: "Intent no reconocido" }, { status: 400 });
 }
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
@@ -61,8 +103,11 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
 export default function OrderDetailPage() {
   const { order, vendor } = useLoaderData<typeof loader>();
+  const { user } = useUser();
   const [searchParams, setSearchParams] = useSearchParams();
   const [sendOpen, setSendOpen] = useState(false);
+  const [authorizeOpen, setAuthorizeOpen] = useState(false);
+  const [authorizeMode, setAuthorizeMode] = useState<"approve" | "reject">("approve");
 
   // Auto-open the send dialog if redirected from create form (?send=1)
   useEffect(() => {
@@ -81,6 +126,11 @@ export default function OrderDetailPage() {
       setSearchParams(next, { replace: true });
     }
   };
+
+  // Verificar si puede autorizar
+  const canAuthorize =
+    user.permissions.includes("orders:authorize") || user.permissions.includes("*");
+  const needsAuthorization = order.status === "creada";
 
   const orderBareId = useMemo(
     () => (order.id.startsWith("order:") ? order.id.slice("order:".length) : order.id),
@@ -114,10 +164,40 @@ export default function OrderDetailPage() {
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge status={order.status} />
-            <Button variant="clay" onClick={() => setSendOpen(true)}>
-              <Icon name="upload" size={13} />
-              Enviar a proveedor
-            </Button>
+
+            {/* Botones de autorización */}
+            {needsAuthorization && canAuthorize && (
+              <>
+                <Button
+                  variant="clay"
+                  onClick={() => {
+                    setAuthorizeMode("approve");
+                    setAuthorizeOpen(true);
+                  }}
+                >
+                  <Icon name="check" size={13} />
+                  Autorizar
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => {
+                    setAuthorizeMode("reject");
+                    setAuthorizeOpen(true);
+                  }}
+                >
+                  <Icon name="x" size={13} />
+                  Rechazar
+                </Button>
+              </>
+            )}
+
+            {/* Botón de enviar (solo si está autorizada) */}
+            {order.status === "autorizada" && (
+              <Button variant="clay" onClick={() => setSendOpen(true)}>
+                <Icon name="upload" size={13} />
+                Enviar a proveedor
+              </Button>
+            )}
           </div>
         </header>
 
@@ -257,6 +337,56 @@ export default function OrderDetailPage() {
               </CardContent>
             </Card>
 
+            {/* Información de Autorización */}
+            {order.status === "autorizada" && order.authorizedBy && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Icon name="check" size={14} className="text-moss" />
+                    Autorización
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-[13px]">
+                  <div className="flex justify-between">
+                    <span className="text-ink-3">Autorizada por:</span>
+                    <span className="text-ink font-medium">{order.authorizedBy}</span>
+                  </div>
+                  {order.authorizedAt && (
+                    <div className="flex justify-between">
+                      <span className="text-ink-3">Fecha:</span>
+                      <span className="text-ink font-mono text-[12px]">
+                        {formatTs(order.authorizedAt)}
+                      </span>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Información de Rechazo */}
+            {order.status === "rechazado" && (
+              <Card className="border-wine-300 bg-wine-50">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-wine-900">
+                    <Icon name="x" size={14} className="text-wine-700" />
+                    Orden Rechazada
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {order.rejectionReason && (
+                    <p className="text-[13px] text-wine-900 italic">
+                      "{order.rejectionReason}"
+                    </p>
+                  )}
+                  {order.authorizedAt && (
+                    <p className="text-[11px] text-wine-700 font-mono">
+                      Rechazada el {formatTs(order.authorizedAt)}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             <Card>
               <CardHeader>
                 <CardTitle>Historial</CardTitle>
@@ -294,6 +424,13 @@ export default function OrderDetailPage() {
             email: vendor?.email,
             whatsappPhone: vendor?.whatsappPhone,
           }}
+        />
+
+        <AuthorizeOrderDialog
+          order={order}
+          open={authorizeOpen}
+          onOpenChange={setAuthorizeOpen}
+          mode={authorizeMode}
         />
       </div>
     </AuthLayout>
@@ -341,6 +478,9 @@ function DocRow({ label, url, internal }: { label: string; url: string | null; i
 function StatusBadge({ status }: { status: OrderBackend["status"] }) {
   const tone = (
     {
+      creada: "ink",
+      autorizada: "moss",
+      facturada: "clay",
       recibido: "clay",
       en_transito: "clay",
       confirmado: "moss",
@@ -353,6 +493,9 @@ function StatusBadge({ status }: { status: OrderBackend["status"] }) {
   )[status];
   const label = (
     {
+      creada: "Creada",
+      autorizada: "Autorizada",
+      facturada: "Facturada",
       recibido: "Recibida",
       en_transito: "En tránsito",
       confirmado: "Confirmada",

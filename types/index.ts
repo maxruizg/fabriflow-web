@@ -344,6 +344,10 @@ export interface InvoiceBackend {
   pdfUrl?: string;
   xmlUrl?: string;
   ordenCompraUrl?: string;
+  // Purchase Order relationship (new flow)
+  purchaseOrder?: string;  // ID de la orden de compra
+  orderFolio?: string;      // Folio de la OC
+  amountVariance?: number;  // Diferencia porcentual
   deleted: boolean;
   deletedAt?: string;
 }
@@ -421,4 +425,21 @@ export interface PurchaseOrderUploadResponse {
   size: number;
   valid: boolean;
   message: string;
+}
+
+/** Orden de compra disponible para facturar */
+export interface OrderForInvoice {
+  id: string;
+  folio: string;
+  date: string;
+  amount: number;
+  currency: string;
+  itemsCount: number;
+  hasInvoice: boolean;
+}
+
+/** Resultado de validación de totales */
+export interface ValidationResult {
+  kind: 'exact' | 'within_tolerance' | 'out_of_tolerance';
+  variance?: number;
 }

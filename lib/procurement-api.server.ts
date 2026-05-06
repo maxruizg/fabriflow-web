@@ -13,7 +13,10 @@ import { apiRequest } from "./api.server";
 // ============================================================================
 
 export type OrderStatusBackend =
-  | "recibido"
+  | "creada"            // Orden creada, pendiente de autorización
+  | "autorizada"        // Orden autorizada, puede enviarse al proveedor
+  | "facturada"         // Factura vinculada a la orden
+  | "recibido"          // Legacy - order received
   | "en_transito"
   | "confirmado"
   | "revision_calidad"
@@ -64,6 +67,11 @@ export interface OrderBackend {
   status: OrderStatusBackend;
   docState: OrderDocState;
   history: OrderEvent[];
+  // Authorization fields
+  authorizedBy?: string | null;
+  authorizedAt?: string | null;
+  rejectionReason?: string | null;
+  // Legacy fields
   sentAt?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -93,6 +101,11 @@ export interface CreateOrderPayload {
 export interface CreateOrderResponse {
   order: OrderBackend;
   shareToken: string;
+}
+
+export interface AuthorizeOrderPayload {
+  approve: boolean;
+  rejectionReason?: string;
 }
 
 export interface SendOrderRecipients {
@@ -344,6 +357,27 @@ export function createOrder(
   );
 }
 
+export function authorizeOrder(
+  token: string,
+  companyId: string,
+  orderId: string,
+  payload: AuthorizeOrderPayload,
+): Promise<OrderBackend> {
+  return apiRequest<OrderBackend>(
+    `/api/orders/${encodeURIComponent(orderId)}/authorize`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
 export function sendOrder(
   token: string,
   companyId: string,
@@ -472,6 +506,21 @@ export function fetchVendorScorecard(
 ): Promise<VendorScorecard> {
   return apiRequest<VendorScorecard>(
     `/api/vendors/${encodeURIComponent(vendorId)}/scorecard`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
+/**
+ * Obtiene las órdenes de compra disponibles para facturar de un proveedor
+ */
+export function getAvailableOrdersForInvoice(
+  token: string,
+  companyId: string,
+  vendorId: string,
+): Promise<import("~/types").OrderForInvoice[]> {
+  return apiRequest<import("~/types").OrderForInvoice[]>(
+    `/api/orders/available-for-invoice${qs({ vendor_id: vendorId })}`,
     withCompanyHeader(token, companyId),
     token,
   );

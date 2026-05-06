@@ -22,7 +22,7 @@ export interface ValidationProgressProps {
 
 /**
  * Displays the progress of invoice validation steps.
- * Shows 6 steps: upload, parse, validate UUIDs/RFCs, verify PO, upload files, save invoice.
+ * Shows 5 steps: upload, parse, validate UUIDs/RFCs, compare with PO, save invoice.
  */
 export function ValidationProgress({
   steps,
@@ -127,14 +127,14 @@ function ValidationStepItem({ step, stepNumber }: ValidationStepItemProps) {
           status === "pending" && "text-ink-4"
         )}
       >
-        {stepNumber}/6
+        {stepNumber}/5
       </div>
     </div>
   );
 }
 
 /**
- * Default validation steps structure.
+ * Default validation steps structure (updated for new flow).
  * Use this as a starting point and update statuses as validation progresses.
  */
 export const DEFAULT_VALIDATION_STEPS: ValidationStep[] = [
@@ -151,11 +151,7 @@ export const DEFAULT_VALIDATION_STEPS: ValidationStep[] = [
     status: "pending",
   },
   {
-    label: "Verificando orden de compra...",
-    status: "pending",
-  },
-  {
-    label: "Almacenando archivos...",
+    label: "Comparando con orden de compra...",
     status: "pending",
   },
   {

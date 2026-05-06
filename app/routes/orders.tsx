@@ -388,7 +388,14 @@ export default function OrdersPage() {
                               </span>
                             </TableCell>
                             <TableCell>
-                              <Badge tone={tone}>{o.status}</Badge>
+                              <div className="flex items-center gap-2">
+                                <Badge tone={tone}>{o.status}</Badge>
+                                {o.status === "creada" && (
+                                  <span className="text-[11px] text-rust-700 font-medium">
+                                    Pendiente autorización
+                                  </span>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
                         );

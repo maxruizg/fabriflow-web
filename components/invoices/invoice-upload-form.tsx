@@ -9,8 +9,16 @@ import {
 import { InvoiceDataPreview } from "~/components/invoices/invoice-data-preview";
 import { Button } from "~/components/ui/button";
 import { Icon } from "~/components/ui/icon";
+import { Label } from "~/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { cn } from "~/lib/utils";
-import type { InvoiceBackend } from "~/types";
+import type { InvoiceBackend, OrderForInvoice } from "~/types";
 
 export interface InvoiceUploadActionData {
   success?: boolean;
@@ -48,13 +56,15 @@ export interface InvoiceUploadFormProps {
   className?: string;
   /** Optional order id to validate this invoice against. */
   orderId?: string | null;
+  /** Available purchase orders for invoice */
+  availableOrders: OrderForInvoice[];
 }
 
 /**
- * Complete invoice upload form with 3 file inputs and single submit button.
+ * Complete invoice upload form with 2 file inputs (PDF + XML) and purchase order selector.
  * Uses Remix Form with server-side processing for proper SSR and progressive enhancement.
  */
-export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps) {
+export function InvoiceUploadForm({ className, orderId, availableOrders }: InvoiceUploadFormProps) {
   // Remix hooks
   const navigation = useNavigation();
   const actionData = useActionData<InvoiceUploadActionData>();
@@ -62,22 +72,25 @@ export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps
   // File states
   const [pdfFactura, setPdfFactura] = React.useState<File | null>(null);
   const [xmlFactura, setXmlFactura] = React.useState<File | null>(null);
-  const [pdfOrden, setPdfOrden] = React.useState<File | null>(null);
+  const [selectedOrderId, setSelectedOrderId] = React.useState<string>("");
 
   // File errors (client-side validation)
   const [pdfFacturaError, setPdfFacturaError] = React.useState<string>("");
   const [xmlFacturaError, setXmlFacturaError] = React.useState<string>("");
-  const [pdfOrdenError, setPdfOrdenError] = React.useState<string>("");
+  const [orderError, setOrderError] = React.useState<string>("");
 
   // Check if form is submitting
   const isSubmitting = navigation.state === "submitting" &&
                        navigation.formData?.get("intent") === "uploadComplete";
 
-  // Check if all files are selected
-  const allFilesSelected = pdfFactura !== null && xmlFactura !== null && pdfOrden !== null;
+  // Check if all required fields are filled
+  const allFieldsSelected = pdfFactura !== null && xmlFactura !== null && selectedOrderId !== "";
 
-  // Validate files before submit
-  const validateFiles = (): boolean => {
+  // Find selected order for preview
+  const selectedOrder = availableOrders.find(o => o.id === selectedOrderId);
+
+  // Validate files and order before submit
+  const validateForm = (): boolean => {
     let isValid = true;
 
     // Validate PDF Factura
@@ -108,18 +121,12 @@ export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps
       setXmlFacturaError("");
     }
 
-    // Validate PDF Orden
-    if (!pdfOrden) {
-      setPdfOrdenError("PDF de orden de compra es requerido");
-      isValid = false;
-    } else if (pdfOrden.type !== "application/pdf") {
-      setPdfOrdenError("El archivo debe ser un PDF");
-      isValid = false;
-    } else if (pdfOrden.size > 10 * 1024 * 1024) {
-      setPdfOrdenError("El archivo es demasiado grande (máximo 10 MB)");
+    // Validate Purchase Order selection
+    if (!selectedOrderId) {
+      setOrderError("Orden de compra es requerida");
       isValid = false;
     } else {
-      setPdfOrdenError("");
+      setOrderError("");
     }
 
     return isValid;
@@ -127,7 +134,7 @@ export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps
 
   // Handle form submit
   const handleSubmit = (e: React.FormEvent) => {
-    if (!validateFiles()) {
+    if (!validateForm()) {
       e.preventDefault();
     }
   };
@@ -180,11 +187,11 @@ export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps
   // Reset form after successful upload
   React.useEffect(() => {
     if (actionData?.success) {
-      // Clear files after 2 seconds to show preview
+      // Clear files and selection after 2 seconds to show preview
       const timeout = setTimeout(() => {
         setPdfFactura(null);
         setXmlFactura(null);
-        setPdfOrden(null);
+        setSelectedOrderId("");
       }, 2000);
       return () => clearTimeout(timeout);
     }
@@ -194,20 +201,95 @@ export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps
     <div className={cn("space-y-6", className)}>
       <Form method="post" encType="multipart/form-data" onSubmit={handleSubmit}>
         <input type="hidden" name="intent" value="uploadComplete" />
-        {orderId ? <input type="hidden" name="orderId" value={orderId} /> : null}
-        {orderId ? (
-          <div className="mb-4 rounded-md border border-clay bg-clay-soft px-3 py-2 text-[12.5px] text-clay-deep">
-            <span className="font-medium">Vinculando a orden:</span>{" "}
-            <span className="font-mono">{orderId}</span>
-            <span className="ml-2 text-ink-3">
-              (los datos del CFDI se compararán contra esta OC)
-            </span>
-          </div>
-        ) : null}
+        <input type="hidden" name="purchaseOrderId" value={selectedOrderId} />
         {actionData?.matchReport ? <MatchReportPanel report={actionData.matchReport} /> : null}
 
+        {/* Purchase Order Selector */}
+        <div className="mb-6">
+          <Label htmlFor="order-select" className="text-sm font-medium mb-2 block">
+            Orden de Compra *
+          </Label>
+          <Select
+            value={selectedOrderId}
+            onValueChange={(value) => {
+              setSelectedOrderId(value);
+              setOrderError("");
+            }}
+            disabled={isSubmitting}
+          >
+            <SelectTrigger
+              id="order-select"
+              className={cn(
+                "w-full",
+                orderError && "border-red-500"
+              )}
+            >
+              <SelectValue placeholder="Selecciona la orden de compra" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableOrders.length === 0 ? (
+                <div className="px-2 py-6 text-center text-sm text-ink-3">
+                  No hay órdenes de compra disponibles
+                </div>
+              ) : (
+                availableOrders.map((order) => (
+                  <SelectItem key={order.id} value={order.id}>
+                    <div className="flex items-center justify-between w-full gap-4">
+                      <span className="font-mono text-sm">{order.folio}</span>
+                      <span className="text-ink-3">—</span>
+                      <span className="font-medium">
+                        {new Intl.NumberFormat("es-MX", {
+                          style: "currency",
+                          currency: order.currency,
+                        }).format(order.amount)}
+                      </span>
+                      {order.hasInvoice && (
+                        <span className="text-xs text-rust-deep ml-2">(ya facturado)</span>
+                      )}
+                    </div>
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+          {orderError && (
+            <p className="text-sm text-red-600 mt-1">{orderError}</p>
+          )}
+          {selectedOrder && (
+            <div className="mt-3 p-3 rounded-md border border-clay bg-clay-soft text-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-ink-2">Folio:</span>
+                    <span className="font-mono text-clay-deep">{selectedOrder.folio}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-ink-2">Fecha:</span>
+                    <span className="text-ink-3">{selectedOrder.date}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-ink-2">Items:</span>
+                    <span className="text-ink-3">{selectedOrder.itemsCount}</span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-lg font-semibold text-clay-deep">
+                    {new Intl.NumberFormat("es-MX", {
+                      style: "currency",
+                      currency: selectedOrder.currency,
+                    }).format(selectedOrder.amount)}
+                  </div>
+                  <div className="text-xs text-ink-3 mt-1">
+                    Los totales deben coincidir
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* File inputs */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <FileDropZone
             label="PDF de Factura"
             name="pdfFactura"
@@ -241,23 +323,6 @@ export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps
             error={xmlFacturaError}
             disabled={isSubmitting}
           />
-
-          <FileDropZone
-            label="Orden de Compra (PDF)"
-            name="pdfOrden"
-            accept=".pdf"
-            maxSize={10 * 1024 * 1024}
-            required
-            icon="file"
-            hint="Documento que respalda la compra"
-            file={pdfOrden}
-            onFileSelect={(file) => {
-              setPdfOrden(file);
-              setPdfOrdenError("");
-            }}
-            error={pdfOrdenError}
-            disabled={isSubmitting}
-          />
         </div>
 
         {/* Submit button */}
@@ -265,7 +330,7 @@ export function InvoiceUploadForm({ className, orderId }: InvoiceUploadFormProps
           <div className="flex items-center justify-end gap-3">
             <Button
               type="submit"
-              disabled={!allFilesSelected || isSubmitting}
+              disabled={!allFieldsSelected || isSubmitting}
               size="lg"
               variant="clay"
             >

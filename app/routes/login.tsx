@@ -207,7 +207,7 @@ export default function Login() {
                   placeholder="ejemplo@empresa.com"
                   required
                   className="h-11"
-                  autoComplete="username"
+                  autoComplete="off"
                 />
               </div>
             ) : (
@@ -224,7 +224,7 @@ export default function Login() {
                   className="h-11 font-mono uppercase"
                   maxLength={13}
                   style={{ textTransform: "uppercase" }}
-                  autoComplete="username"
+                  autoComplete="off"
                 />
                 <p className="text-[11px] text-ink-3">
                   Ingresa tu RFC registrado en la plataforma.
@@ -252,7 +252,7 @@ export default function Login() {
                   placeholder="••••••••"
                   required
                   className="h-11 pr-10"
-                  autoComplete="current-password"
+                  autoComplete="off"
                 />
                 <button
                   type="button"
