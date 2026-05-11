@@ -353,12 +353,23 @@ export default function Invoices() {
               <Icon name="download" size={13} />
               <span className="hidden sm:inline">Exportar</span>
             </Button>
-            {(isVendor || user?.permissions?.includes("invoices:create")) ? (
-              <Button size="sm" onClick={() => navigate("/invoices/new")} variant="clay">
-                <Icon name="plus" size={13} />
-                Subir factura
-              </Button>
-            ) : null}
+            {(() => {
+              const canUploadInvoice =
+                isVendor ||
+                isAdmin ||
+                (user?.permissions ?? []).some(
+                  (p) =>
+                    p === "invoices:create" ||
+                    p === "invoices:manage" ||
+                    p === "*",
+                );
+              return canUploadInvoice ? (
+                <Button size="sm" onClick={() => navigate("/invoices/new")} variant="clay">
+                  <Icon name="plus" size={13} />
+                  Subir factura
+                </Button>
+              ) : null;
+            })()}
           </div>
         </header>
 
