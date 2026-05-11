@@ -8,30 +8,6 @@ export interface Detail {
   unit: string;
 }
 
-export interface SerializeCreditNote {
-  entry_date: string;
-  fecha: string;
-  folio: string;
-  id_pdf: string;
-  id_xml: string;
-  moneda: string;
-  tipo_documento: string;
-  total: string;
-  uuid: string;
-}
-
-export interface CreditNote {
-  entryDate: string;
-  date: string;
-  folio: string;
-  idPdf: string;
-  idXml: string;
-  currency: string;
-  documentType: string;
-  total: string;
-  uuid: string;
-}
-
 export interface SerializePayment {
   entry_date: string;
   fecha: string;
@@ -133,7 +109,6 @@ export interface MultiComplement {
 }
 
 export type SerializeComplement =
-  | SerializeCreditNote
   | SerializePayment
   | SerializePaymentComplement
   | SerializeCancel
@@ -141,7 +116,6 @@ export type SerializeComplement =
   | SerializeMultiComplement;
 
 export type Complement =
-  | CreditNote
   | Payment
   | PaymentComplement
   | Cancel
@@ -448,4 +422,73 @@ export interface OrderForInvoice {
 export interface ValidationResult {
   kind: 'exact' | 'within_tolerance' | 'out_of_tolerance';
   variance?: number;
+}
+
+// ============================================================================
+// Credit Note Types (new Rust API — Task 7)
+// ============================================================================
+
+export interface CreditNote {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  company: string;
+  vendor: string | null;
+  invoice: string;
+  uuid: string;
+  folio: string;
+  serie: string | null;
+  fechaEmision: string;
+  fechaEntrada: string;
+  fechaTimbrado: string;
+  rfcEmisor: string;
+  nombreEmisor: string;
+  rfcReceptor: string;
+  nombreReceptor: string;
+  subtotal: number;
+  total: number;
+  moneda: string;
+  tipoCambio: number | null;
+  formaPago: string | null;
+  usoCfdi: string | null;
+  lugarExpedicion: string;
+  tipoRelacion: string;
+  relatedInvoiceUuid: string;
+  pdfKey: string | null;
+  xmlKey: string | null;
+}
+
+/**
+ * Invoice balance including credited amounts (credit-notes flow).
+ * Note: a simpler `InvoiceBalance` (without `credited`) lives in
+ * `procurement-api.server.ts` for the payments/orders flow.
+ */
+export interface InvoiceBalanceWithCredit {
+  total: number;
+  paid: number;
+  credited: number;
+  outstanding: number;
+  currency: string;
+}
+
+export type UploadStepStatus = "completed" | "error";
+export interface UploadStep {
+  label: string;
+  status: UploadStepStatus;
+  error?: string | null;
+}
+
+export type DocKind = "oc" | "rem" | "nc" | "pago";
+
+export interface UploadActionResult<TPayload = unknown> {
+  ok: boolean;
+  kind: DocKind;
+  steps: UploadStep[];
+  result?: TPayload;
+  error?: string;
+}
+
+export interface CreditNoteUploadPayload {
+  creditNote: CreditNote;
+  balance: InvoiceBalanceWithCredit;
 }

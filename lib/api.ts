@@ -9,7 +9,6 @@ import type {
   SerializeComplement,
   Complement,
   SerializeMultiComplement,
-  SerializeCreditNote,
   SerializePaymentComplement,
   SerializePayment,
   SerializeCancel,
@@ -67,22 +66,6 @@ export function transformInvoice(serialized: SerializeInvoice): Invoice {
           entryDate: multiComp.entry_date,
           idPdf: multiComp.id_pdf,
           idXml: multiComp.id_xml,
-        };
-      }
-
-      // Handle SerializeCreditNote
-      if ('folio' in comp && 'uuid' in comp && 'moneda' in comp && !('referencia' in comp)) {
-        const creditNote = comp as SerializeCreditNote;
-        return {
-          entryDate: creditNote.entry_date,
-          date: creditNote.fecha,
-          folio: creditNote.folio,
-          idPdf: creditNote.id_pdf,
-          idXml: creditNote.id_xml,
-          currency: creditNote.moneda,
-          documentType: creditNote.tipo_documento,
-          total: creditNote.total,
-          uuid: creditNote.uuid,
         };
       }
 
