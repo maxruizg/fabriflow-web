@@ -517,9 +517,26 @@ export default function OrderDetailPage() {
                 <CardTitle>Documentos</CardTitle>
               </CardHeader>
               <CardContent className="text-[13px] space-y-2">
-                <DocRow label="OC (PDF)" url={order.docState.ocUrl} />
-                <DocRow label="Remisión" url={order.docState.remUrl} />
-                <DocRow label="Nota crédito" url={order.docState.ncUrl} />
+                <DocRow
+                  label="OC (PDF)"
+                  url={order.docState.ocUrl}
+                  uploadHref={!order.docState.ocUrl ? `/orders/${orderBareId}/upload-doc?kind=oc` : null}
+                />
+                <DocRow
+                  label="Remisión"
+                  url={order.docState.remUrl}
+                  uploadHref={!order.docState.remUrl ? `/orders/${orderBareId}/upload-doc?kind=rem` : null}
+                />
+                <DocRow
+                  label="Nota crédito"
+                  url={order.docState.ncUrl}
+                  uploadHref={!order.docState.ncUrl ? `/orders/${orderBareId}/upload-doc?kind=nc` : null}
+                />
+                <DocRow
+                  label="Comprobante de pago"
+                  url={order.docState.paymentReceiptUrl ?? null}
+                  uploadHref={!order.docState.paymentReceiptUrl ? `/orders/${orderBareId}/upload-doc?kind=pago` : null}
+                />
                 <DocRow
                   label="Factura vinculada"
                   url={order.docState.facInvoiceId ? `/invoices/${stripPrefix(order.docState.facInvoiceId, "invoice")}` : null}
