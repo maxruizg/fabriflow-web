@@ -291,6 +291,46 @@ export default function OrderDetailPage() {
               </Button>
             )}
 
+            {/* Subir documento — dropdown con los 4 tipos de doc adjuntos a la OC.
+                Sólo se muestran los kinds que aún faltan; si están los 4, se oculta el botón. */}
+            {(() => {
+              const docOptions: { label: string; kind: "oc" | "rem" | "nc" | "pago" }[] = [];
+              if (!order.docState.ocUrl) docOptions.push({ label: "OC (PDF)", kind: "oc" });
+              if (!order.docState.remUrl) docOptions.push({ label: "Remisión", kind: "rem" });
+              if (!order.docState.ncUrl) docOptions.push({ label: "Nota de crédito", kind: "nc" });
+              if (!order.docState.paymentReceiptUrl) docOptions.push({ label: "Comprobante de pago", kind: "pago" });
+              if (docOptions.length === 0) return null;
+              return (
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger asChild>
+                    <Button variant="outline" size="sm" title="Subir documento adjunto a la OC">
+                      <Icon name="upload" size={13} />
+                      Subir documento
+                    </Button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content
+                      align="end"
+                      sideOffset={6}
+                      className="z-50 min-w-[200px] overflow-hidden rounded-md border border-line bg-paper p-1 shadow-md data-[state=open]:animate-in data-[state=open]:fade-in-0"
+                    >
+                      {docOptions.map((opt) => (
+                        <DropdownMenu.Item key={opt.kind} asChild>
+                          <Link
+                            to={`/orders/${orderBareId}/upload-doc?kind=${opt.kind}`}
+                            className="flex cursor-pointer select-none items-center gap-2 rounded-sm px-2.5 py-2 text-[13px] text-ink outline-none data-[highlighted]:bg-paper-2 data-[highlighted]:text-ink"
+                          >
+                            <Icon name="upload" size={13} className="text-ink-3" />
+                            {opt.label}
+                          </Link>
+                        </DropdownMenu.Item>
+                      ))}
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+              );
+            })()}
+
             {/* Abrir PDF en nueva pestaña — siempre disponible. */}
             <Button variant="outline" size="sm" asChild>
               <a
@@ -517,35 +557,17 @@ export default function OrderDetailPage() {
                 <CardTitle>Documentos</CardTitle>
               </CardHeader>
               <CardContent className="text-[13px] space-y-2">
-                <DocRow
-                  label="OC (PDF)"
-                  url={order.docState.ocUrl}
-                  uploadHref={!order.docState.ocUrl ? `/orders/${orderBareId}/upload-doc?kind=oc` : null}
-                />
-                <DocRow
-                  label="Remisión"
-                  url={order.docState.remUrl}
-                  uploadHref={!order.docState.remUrl ? `/orders/${orderBareId}/upload-doc?kind=rem` : null}
-                />
-                <DocRow
-                  label="Nota crédito"
-                  url={order.docState.ncUrl}
-                  uploadHref={!order.docState.ncUrl ? `/orders/${orderBareId}/upload-doc?kind=nc` : null}
-                />
+                <DocRow label="OC (PDF)" url={order.docState.ocUrl} />
+                <DocRow label="Remisión" url={order.docState.remUrl} />
+                <DocRow label="Nota crédito" url={order.docState.ncUrl} />
                 <DocRow
                   label="Comprobante de pago"
                   url={order.docState.paymentReceiptUrl ?? null}
-                  uploadHref={!order.docState.paymentReceiptUrl ? `/orders/${orderBareId}/upload-doc?kind=pago` : null}
                 />
                 <DocRow
                   label="Factura vinculada"
                   url={order.docState.facInvoiceId ? `/invoices/${stripPrefix(order.docState.facInvoiceId, "invoice")}` : null}
                   internal
-                  uploadHref={
-                    canShowInvoiceUpload && !order.docState.facInvoiceId
-                      ? `/invoices/new?orderId=${orderBareId}`
-                      : null
-                  }
                 />
               </CardContent>
             </Card>

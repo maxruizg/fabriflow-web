@@ -645,6 +645,17 @@ export default function InvoiceDetails() {
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
+              {canUploadNc && (
+                <Button size="sm" variant="outline" asChild>
+                  <Link
+                    to={`/invoice/${invoice.id}/upload-doc?kind=nc`}
+                    title="Subir nota de crédito vinculada a esta factura"
+                  >
+                    <Icon name="upload" size={13} />
+                    Subir nota de crédito
+                  </Link>
+                </Button>
+              )}
               {isAdmin ? (
                 <Select value={invoice.estado} onValueChange={handleStatusChange}>
                   <SelectTrigger className="w-[160px]" aria-label="Estado de factura">
@@ -779,13 +790,6 @@ export default function InvoiceDetails() {
                     <h3 className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
                       Notas de crédito relacionadas
                     </h3>
-                    {canUploadNc && (
-                      <Link to={`/invoice/${invoice.id}/upload-doc?kind=nc`}>
-                        <Button size="sm" variant="outline">
-                          Subir nota de crédito
-                        </Button>
-                      </Link>
-                    )}
                   </div>
                   {creditNotes.length === 0 ? (
                     <p className="text-[12px] text-ink-3">

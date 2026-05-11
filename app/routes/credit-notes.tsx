@@ -20,6 +20,14 @@ import { requireUser, getFullSession } from "~/lib/session.server";
 import { listCreditNotes } from "~/lib/credit-notes-api.server";
 import type { CreditNote } from "~/types";
 
+export const handle = {
+  cta: {
+    label: "Subir nota de crédito",
+    to: "/credit-notes/new",
+    icon: "upload" as const,
+  },
+};
+
 export const meta: MetaFunction = () => {
   return [
     { title: "Notas de crédito - FabriFlow" },

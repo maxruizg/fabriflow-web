@@ -44,9 +44,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
-import { PaymentLinkCard } from "~/components/payments/payment-link-card";
-import { PaymentReceiptCard } from "~/components/payments/payment-receipt-card";
-
 export const meta: MetaFunction = () => [
   { title: "Pagos — FabriFlow" },
   { name: "description", content: "Tesorería y conciliación de pagos a proveedores" },
@@ -145,7 +142,6 @@ export default function PaymentsPage() {
     });
   }, [payments, statusFilter, methodFilter, currencyFilter, search]);
 
-  const selected = payments.find((p) => p.id === selectedId) ?? null;
 
   // KPI computations
   const weekToBay = payments
@@ -186,7 +182,7 @@ export default function PaymentsPage() {
           </div>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <StatCard
             label="A pagar esta semana"
             currency="$"
@@ -227,12 +223,6 @@ export default function PaymentsPage() {
             label="Pendientes conf."
             value={String(pendingCount)}
             delta={{ label: "Esperando confirmación del proveedor" }}
-          />
-          <StatCard
-            label="FX promedio"
-            value="17.42"
-            delta={{ label: "USD → MXN", direction: "up" }}
-            sparkTone="clay"
           />
         </div>
 
@@ -371,38 +361,6 @@ export default function PaymentsPage() {
               </div>
             </Card>
 
-            {selected ? (
-              <div className="grid gap-4 lg:grid-cols-2">
-                <PaymentLinkCard
-                  payment={selected}
-                  invoices={[
-                    {
-                      id: selected.inv,
-                      amount: selected.amount,
-                      due: "2026-05-18",
-                      paid: 100,
-                    },
-                    {
-                      id: `FAC-${(parseInt(selected.inv.split("-")[1] ?? "0", 10) - 5)
-                        .toString()
-                        .padStart(5, "0")}`,
-                      amount: selected.amount * 0.45,
-                      due: "2026-06-02",
-                      paid: 45,
-                    },
-                  ]}
-                />
-                <PaymentReceiptCard
-                  payment={selected}
-                  bankInfo={{
-                    bank: "BBVA México",
-                    clabeMasked: "012 ··· ··· ··· 84",
-                    beneficiary: selected.vendor,
-                    rfc: "VEND" + selected.id.slice(-4),
-                  }}
-                />
-              </div>
-            ) : null}
           </TabsContent>
         </Tabs>
       </div>
