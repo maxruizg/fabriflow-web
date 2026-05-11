@@ -16,16 +16,19 @@ export interface ValidationStep {
 export interface ValidationProgressProps {
   /** List of validation steps */
   steps: ValidationStep[];
+  /** Header title shown above the steps */
+  title?: string;
   /** Additional CSS class */
   className?: string;
 }
 
 /**
- * Displays the progress of invoice validation steps.
- * Shows 5 steps: upload, parse, validate UUIDs/RFCs, compare with PO, save invoice.
+ * Displays the progress of document validation steps.
+ * Generic — works for any document kind (factura, nota de crédito, OC, pago, etc.).
  */
 export function ValidationProgress({
   steps,
+  title,
   className,
 }: ValidationProgressProps) {
   return (
@@ -33,7 +36,7 @@ export function ValidationProgress({
       {/* Header */}
       <div className="flex items-center gap-2 text-sm font-medium text-ink-2">
         <Icon name="clock" size={16} />
-        <span>Validando factura...</span>
+        <span>{title ?? "Validando documento..."}</span>
       </div>
 
       {/* Steps */}
@@ -43,6 +46,7 @@ export function ValidationProgress({
             key={index}
             step={step}
             stepNumber={index + 1}
+            total={steps.length}
           />
         ))}
       </div>
@@ -53,9 +57,10 @@ export function ValidationProgress({
 interface ValidationStepItemProps {
   step: ValidationStep;
   stepNumber: number;
+  total: number;
 }
 
-function ValidationStepItem({ step, stepNumber }: ValidationStepItemProps) {
+function ValidationStepItem({ step, stepNumber, total }: ValidationStepItemProps) {
   const { label, status, error } = step;
 
   // Determine icon based on status
@@ -127,35 +132,9 @@ function ValidationStepItem({ step, stepNumber }: ValidationStepItemProps) {
           status === "pending" && "text-ink-4"
         )}
       >
-        {stepNumber}/5
+        {stepNumber}/{total}
       </div>
     </div>
   );
 }
 
-/**
- * Default validation steps structure (updated for new flow).
- * Use this as a starting point and update statuses as validation progresses.
- */
-export const DEFAULT_VALIDATION_STEPS: ValidationStep[] = [
-  {
-    label: "Subiendo archivos...",
-    status: "pending",
-  },
-  {
-    label: "Parseando XML CFDI...",
-    status: "pending",
-  },
-  {
-    label: "Validando UUID y RFCs...",
-    status: "pending",
-  },
-  {
-    label: "Comparando con orden de compra...",
-    status: "pending",
-  },
-  {
-    label: "Guardando factura...",
-    status: "pending",
-  },
-];

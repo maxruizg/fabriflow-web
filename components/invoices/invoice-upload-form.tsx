@@ -3,9 +3,16 @@ import { Form, useNavigation, useActionData } from "@remix-run/react";
 import { FileDropZone } from "~/components/ui/file-drop-zone";
 import {
   ValidationProgress,
-  DEFAULT_VALIDATION_STEPS,
   type ValidationStep,
-} from "~/components/invoices/validation-progress";
+} from "~/components/uploads/validation-progress";
+
+const DEFAULT_VALIDATION_STEPS: ValidationStep[] = [
+  { label: "Subiendo archivos...", status: "pending" },
+  { label: "Parseando XML CFDI...", status: "pending" },
+  { label: "Validando UUID y RFCs...", status: "pending" },
+  { label: "Comparando con orden de compra...", status: "pending" },
+  { label: "Guardando factura...", status: "pending" },
+];
 import { InvoiceDataPreview } from "~/components/invoices/invoice-data-preview";
 import { Button } from "~/components/ui/button";
 import { Icon } from "~/components/ui/icon";
@@ -362,7 +369,7 @@ export function InvoiceUploadForm({ className, orderId, availableOrders }: Invoi
 
       {/* Validation progress (shown during upload or if error) */}
       {(isSubmitting || actionData?.error) && (
-        <ValidationProgress steps={getValidationSteps()} />
+        <ValidationProgress steps={getValidationSteps()} title="Validando factura..." />
       )}
 
       {/* Error message (shown if upload failed) */}
