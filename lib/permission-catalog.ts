@@ -66,7 +66,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     permissions: [
       { key: "credit_notes:read", label: "Ver" },
       { key: "credit_notes:upload", label: "Subir" },
-      { key: "credit_notes:approve", label: "Aprobar" },
+      { key: "credit_notes:approve", label: "Administrar" },
     ],
   },
   {
