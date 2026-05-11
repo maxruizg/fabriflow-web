@@ -16,6 +16,7 @@ const STATIC_CRUMBS: Record<string, string[]> = {
   "/orders/new": ["Operación", "Órdenes", "Nueva"],
   "/invoices": ["Operación", "Facturas"],
   "/invoices/new": ["Operación", "Facturas", "Nueva"],
+  "/credit-notes": ["Operación", "Notas de crédito"],
   "/providers": ["Maestros", "Proveedores"],
   "/vendors": ["Maestros", "Proveedores"],
   "/payments": ["Tesorería", "Pagos"],

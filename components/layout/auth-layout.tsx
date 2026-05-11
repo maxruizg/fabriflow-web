@@ -29,6 +29,7 @@ const PRIMARY_NAV: NavItem[] = [
   { name: "Panel", href: "/dashboard", icon: "dash", permissions: ["dashboard:read"] },
   { name: "Órdenes", href: "/orders", icon: "orders", permissions: [], factoryOnly: false },
   { name: "Facturas", href: "/invoices", icon: "file", permissions: ["invoices:read", "invoices:manage"] },
+  { name: "Notas de crédito", href: "/credit-notes", icon: "file", permissions: ["credit_notes:read", "invoices:read", "invoices:manage"] },
   { name: "Proveedores", href: "/providers", icon: "vendors", permissions: ["vendors:read", "vendors:manage"], factoryOnly: true },
   { name: "Pagos", href: "/payments", icon: "pay", permissions: [] },
   { name: "Reportes", href: "/reports", icon: "reports", permissions: ["reports:read", "reports:export"] },
