@@ -2,19 +2,21 @@ import * as React from "react";
 
 import { cn } from "~/lib/utils";
 
-export type DocType = "OC" | "FAC" | "REM" | "NC";
+export type DocType = "OC" | "FAC" | "REM" | "NC" | "PAGO";
 
 const SHORT: Record<DocType, string> = {
   OC: "OC",
   FAC: "FA",
   REM: "RE",
   NC: "NC",
+  PAGO: "PG",
 };
 const LONG: Record<DocType, string> = {
   OC: "Orden de compra",
   FAC: "Factura",
   REM: "Remito",
   NC: "Nota de crédito",
+  PAGO: "Comprobante de pago",
 };
 
 export interface DocChipProps extends React.HTMLAttributes<HTMLSpanElement> {
@@ -48,7 +50,7 @@ export interface DocStripProps {
   className?: string;
 }
 
-const ALL_DOCS: DocType[] = ["OC", "FAC", "REM", "NC"];
+const ALL_DOCS: DocType[] = ["OC", "FAC", "REM", "NC", "PAGO"];
 
 export function DocStrip({ docs, className }: DocStripProps) {
   return (

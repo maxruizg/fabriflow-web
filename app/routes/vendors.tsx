@@ -1,9 +1,14 @@
-import { useMemo, useState } from "react";
-import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/cloudflare";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "@remix-run/cloudflare";
 import { json } from "@remix-run/cloudflare";
-import { useLoaderData } from "@remix-run/react";
+import { useFetcher, useLoaderData } from "@remix-run/react";
 
-import { requireUser } from "~/lib/session.server";
+import { getAccessTokenFromSession, requireUser } from "~/lib/session.server";
+import { sendVendorInvite } from "~/lib/api.server";
 import { cn } from "~/lib/utils";
 import {
   SAMPLE_VENDORS,
@@ -17,6 +22,9 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card } from "~/components/ui/card";
 import { Icon } from "~/components/ui/icon";
+import { Input } from "~/components/ui/input";
+import { Label } from "~/components/ui/label";
+import { Alert, AlertDescription } from "~/components/ui/alert";
 import { StatCard } from "~/components/ui/stat-card";
 import { Toolbar } from "~/components/ui/toolbar";
 import {
@@ -36,6 +44,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog";
 import { VendorDetailPanel } from "~/components/vendors/vendor-detail-panel";
 
 export const meta: MetaFunction = () => [
@@ -53,8 +69,59 @@ export const handle = {
 export async function loader({ request }: LoaderFunctionArgs) {
   // Backend is ready: list comes from existing `/api/vendors` (companies);
   // per-vendor scorecard from `procurement-api.server.ts#fetchVendorScorecard`.
-  await requireUser(request);
-  return json({ vendors: SAMPLE_VENDORS });
+  const user = await requireUser(request);
+  return json({ vendors: SAMPLE_VENDORS, companyId: user.company ?? null });
+}
+
+type InviteActionData =
+  | { ok: true; shareLink: string; expiresAt: string }
+  | { ok: false; error: string };
+
+export async function action({
+  request,
+}: ActionFunctionArgs): Promise<ReturnType<typeof json<InviteActionData>>> {
+  const user = await requireUser(request);
+  const companyId = user.company;
+  if (!companyId) {
+    return json<InviteActionData>(
+      { ok: false, error: "Selecciona una empresa antes de invitar proveedores." },
+      { status: 400 },
+    );
+  }
+
+  const accessToken = await getAccessTokenFromSession(request);
+  if (!accessToken) {
+    return json<InviteActionData>(
+      { ok: false, error: "Sesión expirada. Vuelve a iniciar sesión." },
+      { status: 401 },
+    );
+  }
+
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+  if (intent !== "invite-vendor") {
+    return json<InviteActionData>({ ok: false, error: "Acción desconocida" }, { status: 400 });
+  }
+
+  const email = String(formData.get("email") ?? "").trim();
+  if (!email || !email.includes("@")) {
+    return json<InviteActionData>(
+      { ok: false, error: "Ingresa un correo válido." },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await sendVendorInvite(email, accessToken, companyId);
+    return json<InviteActionData>({
+      ok: true,
+      shareLink: result.shareLink,
+      expiresAt: result.expiresAt,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "No se pudo enviar la invitación.";
+    return json<InviteActionData>({ ok: false, error: message }, { status: 500 });
+  }
 }
 
 const RISK_TONE = {
@@ -80,6 +147,7 @@ export default function VendorsPage() {
   const [riskFilter, setRiskFilter] = useState<string>("all");
   const [view, setView] = useState<ViewMode>("table");
   const [selectedId, setSelectedId] = useState<string | null>(vendors[0]?.id ?? null);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -137,7 +205,7 @@ export default function VendorsPage() {
               <Icon name="download" size={13} />
               Exportar catálogo
             </Button>
-            <Button variant="clay" size="sm">
+            <Button variant="clay" size="sm" onClick={() => setInviteOpen(true)}>
               <Icon name="plus" size={13} />
               Nuevo proveedor
             </Button>
@@ -367,7 +435,169 @@ export default function VendorsPage() {
           <VendorDetailPanel vendor={selected} />
         </div>
       </div>
+      <InviteVendorDialog open={inviteOpen} onOpenChange={setInviteOpen} />
     </AuthLayout>
+  );
+}
+
+function InviteVendorDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const fetcher = useFetcher<InviteActionData>();
+  const [email, setEmail] = useState("");
+  const [copied, setCopied] = useState(false);
+  const submitting = fetcher.state !== "idle";
+  const data = fetcher.data;
+
+  // Reset local UI when the dialog closes.
+  useEffect(() => {
+    if (!open) {
+      setEmail("");
+      setCopied(false);
+    }
+  }, [open]);
+
+  // Reset copied state when a new share link arrives.
+  useEffect(() => {
+    if (data && "ok" in data && data.ok) {
+      setCopied(false);
+    }
+  }, [data]);
+
+  const success = data && "ok" in data && data.ok ? data : null;
+  const error = data && "ok" in data && !data.ok ? data.error : null;
+
+  const handleCopy = async () => {
+    if (!success) return;
+    try {
+      await navigator.clipboard.writeText(success.shareLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API can fail in insecure contexts; the input is selectable as fallback.
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle className="font-display text-[20px]">Invitar proveedor</DialogTitle>
+          <DialogDescription className="text-[13px] text-ink-3">
+            Le enviaremos un enlace personalizado para que se registre en tu empresa.
+            Podrá completar sus datos manualmente o subir su Constancia de Situación
+            Fiscal para autollenarlos.
+          </DialogDescription>
+        </DialogHeader>
+
+        {success ? (
+          <div className="space-y-4">
+            <Alert className="bg-moss-soft border-moss/20">
+              <Icon name="check" size={14} className="text-moss-deep" />
+              <AlertDescription className="text-[12.5px] text-moss-deep">
+                Invitación enviada. También puedes compartir el enlace manualmente.
+              </AlertDescription>
+            </Alert>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                Enlace de invitación
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  readOnly
+                  value={success.shareLink}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="h-9 text-[12px] font-mono"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopy}
+                  className="h-9 shrink-0"
+                >
+                  {copied ? "Copiado" : "Copiar"}
+                </Button>
+              </div>
+              <p className="text-[11px] text-ink-3">
+                El enlace expira el{" "}
+                {new Date(success.expiresAt).toLocaleDateString("es-MX", {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                })}
+                .
+              </p>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="clay"
+                onClick={() => onOpenChange(false)}
+                className="h-10"
+              >
+                Listo
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <fetcher.Form method="post" className="space-y-4">
+            <input type="hidden" name="intent" value="invite-vendor" />
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="invite-email"
+                className="text-[11px] font-medium uppercase tracking-wider text-ink-3"
+              >
+                Correo del proveedor *
+              </Label>
+              <Input
+                id="invite-email"
+                name="email"
+                type="email"
+                placeholder="proveedor@empresa.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoFocus
+                disabled={submitting}
+                className="h-10 text-sm"
+              />
+            </div>
+            {error ? (
+              <Alert className="bg-wine-soft border-wine/20">
+                <Icon name="warn" size={14} className="text-wine" />
+                <AlertDescription className="text-[12px] text-wine">{error}</AlertDescription>
+              </Alert>
+            ) : null}
+            <DialogFooter className="gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={submitting}
+                className="h-10"
+              >
+                Cancelar
+              </Button>
+              <Button type="submit" variant="clay" disabled={submitting} className="h-10">
+                {submitting ? (
+                  <>
+                    <span className="mr-2 h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    Enviando…
+                  </>
+                ) : (
+                  "Enviar invitación"
+                )}
+              </Button>
+            </DialogFooter>
+          </fetcher.Form>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

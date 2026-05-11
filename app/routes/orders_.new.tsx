@@ -35,6 +35,47 @@ export const meta: MetaFunction = () => [
   { title: "Nueva orden — FabriFlow" },
 ];
 
+// ----------------------------------------------------------------------------
+// SAT catalogs (most-used subset). The user can override via free-text in the
+// "Otro" option which renders an inline input.
+// ----------------------------------------------------------------------------
+
+const CFDI_USES: { code: string; label: string }[] = [
+  { code: "G01", label: "G01 — Adquisición de mercancías" },
+  { code: "G02", label: "G02 — Devoluciones, descuentos o bonificaciones" },
+  { code: "G03", label: "G03 — Gastos en general" },
+  { code: "I01", label: "I01 — Construcciones" },
+  { code: "I02", label: "I02 — Mobiliario y equipo de oficina" },
+  { code: "I04", label: "I04 — Equipo de cómputo" },
+  { code: "I06", label: "I06 — Comunicaciones telefónicas" },
+  { code: "I08", label: "I08 — Otra maquinaria y equipo" },
+  { code: "P01", label: "P01 — Por definir" },
+  { code: "S01", label: "S01 — Sin efectos fiscales" },
+];
+
+const PAYMENT_METHODS: { code: string; label: string }[] = [
+  { code: "PUE", label: "PUE — Pago en una sola exhibición" },
+  { code: "PPD", label: "PPD — Pago en parcialidades o diferido" },
+];
+
+const PAYMENT_FORMS: { code: string; label: string }[] = [
+  { code: "01", label: "01 — Efectivo" },
+  { code: "02", label: "02 — Cheque nominativo" },
+  { code: "03", label: "03 — Transferencia electrónica" },
+  { code: "04", label: "04 — Tarjeta de crédito" },
+  { code: "28", label: "28 — Tarjeta de débito" },
+  { code: "99", label: "99 — Por definir" },
+];
+
+const COMMON_DEPARTMENTS = [
+  "Compras",
+  "Producción",
+  "Almacén",
+  "Mantenimiento",
+  "Calidad",
+  "Administración",
+];
+
 export const handle = {
   crumb: ["Operación", "Órdenes", "Nueva"],
 };
@@ -86,6 +127,18 @@ export async function action({ request }: ActionFunctionArgs) {
   const notes = String(fd.get("notes") ?? "").trim();
   const paymentTerms = String(fd.get("paymentTerms") ?? "").trim();
   const deliveryAddress = String(fd.get("deliveryAddress") ?? "").trim();
+  const deliveryWarehouse = String(fd.get("deliveryWarehouse") ?? "").trim();
+  const deliveryDate = String(fd.get("deliveryDate") ?? "").trim();
+  const requestingDepartment = String(fd.get("requestingDepartment") ?? "").trim();
+  const cfdiUse = String(fd.get("cfdiUse") ?? "").trim();
+  const paymentMethod = String(fd.get("paymentMethod") ?? "").trim();
+  const paymentForm = String(fd.get("paymentForm") ?? "").trim();
+  const observations = String(fd.get("observations") ?? "").trim();
+  const ivaRateRaw = String(fd.get("ivaRate") ?? "16").trim();
+  const ivaRateNum = parseFloat(ivaRateRaw);
+  const ivaRate = Number.isFinite(ivaRateNum) && ivaRateNum >= 0 && ivaRateNum <= 100
+    ? ivaRateNum
+    : 16;
   const itemsJson = String(fd.get("items") ?? "[]");
 
   const fieldErrors: Record<string, string> = {};
@@ -147,6 +200,14 @@ export async function action({ request }: ActionFunctionArgs) {
       notes: notes || undefined,
       paymentTerms: paymentTerms || undefined,
       deliveryAddress: deliveryAddress || undefined,
+      deliveryWarehouse: deliveryWarehouse || undefined,
+      deliveryDate: deliveryDate || undefined,
+      requestingDepartment: requestingDepartment || undefined,
+      cfdiUse: cfdiUse || undefined,
+      paymentMethod: paymentMethod || undefined,
+      paymentForm: paymentForm || undefined,
+      observations: observations || undefined,
+      ivaRate,
     });
     const bareId = result.order.id.startsWith("order:")
       ? result.order.id.slice("order:".length)
@@ -176,10 +237,20 @@ export default function NewOrder() {
   const [notes, setNotes] = useState<string>("");
   const [paymentTerms, setPaymentTerms] = useState<string>("");
   const [deliveryAddress, setDeliveryAddress] = useState<string>("");
+  // MX-billing fields (backend migration 005)
+  const [deliveryWarehouse, setDeliveryWarehouse] = useState<string>("");
+  const [deliveryDate, setDeliveryDate] = useState<string>("");
+  const [requestingDepartment, setRequestingDepartment] = useState<string>("Compras");
+  const [cfdiUse, setCfdiUse] = useState<string>("G03");
+  const [paymentMethod, setPaymentMethod] = useState<string>("PPD");
+  const [paymentForm, setPaymentForm] = useState<string>("99");
+  const [observations, setObservations] = useState<string>("");
+  const [ivaRate, setIvaRate] = useState<number>(16);
+  const [ivaEditing, setIvaEditing] = useState<boolean>(false);
   const [lines, setLines] = useState<OrderLineDraft[]>([emptyLine()]);
 
   const subtotal = lines.reduce((acc, l) => acc + lineTotal(l), 0);
-  const ivaCents = Math.round(subtotal * 0.16 * 100);
+  const ivaCents = Math.round((subtotal * ivaRate / 100) * 100);
   const totalCents = Math.round(subtotal * 100) + ivaCents;
   const total = totalCents / 100;
 
@@ -331,6 +402,66 @@ export default function NewOrder() {
           <Card>
             <CardHeader>
               <CardTitle>
+                Datos <em className="not-italic text-clay">de entrega</em>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                  Almacén
+                </Label>
+                <Input
+                  name="deliveryWarehouse"
+                  value={deliveryWarehouse}
+                  onChange={(e) => setDeliveryWarehouse(e.target.value)}
+                  placeholder="CADAQUES 50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                  Fecha de entrega
+                </Label>
+                <Input
+                  name="deliveryDate"
+                  type="date"
+                  value={deliveryDate}
+                  onChange={(e) => setDeliveryDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5 md:col-span-2">
+                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                  Dirección de entrega
+                </Label>
+                <Input
+                  name="deliveryAddress"
+                  value={deliveryAddress}
+                  onChange={(e) => setDeliveryAddress(e.target.value)}
+                  placeholder="Cadaqués No. 50 Col. Cerro de la Estrella, Iztapalapa CP 09839"
+                />
+              </div>
+              <div className="space-y-1.5 md:col-span-2">
+                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                  Departamento solicitante
+                </Label>
+                <Input
+                  name="requestingDepartment"
+                  value={requestingDepartment}
+                  onChange={(e) => setRequestingDepartment(e.target.value)}
+                  placeholder="Compras"
+                  list="departments-list"
+                />
+                <datalist id="departments-list">
+                  {COMMON_DEPARTMENTS.map((d) => (
+                    <option key={d} value={d} />
+                  ))}
+                </datalist>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>
                 Líneas <em className="not-italic text-clay">de la orden</em>
               </CardTitle>
             </CardHeader>
@@ -345,42 +476,160 @@ export default function NewOrder() {
           <Card>
             <CardHeader>
               <CardTitle>
+                Datos <em className="not-italic text-clay">para facturación</em>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-1.5">
+                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                  Uso de CFDI
+                </Label>
+                <Select value={cfdiUse} onValueChange={setCfdiUse} name="cfdiUse">
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecciona uso CFDI" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CFDI_USES.map((u) => (
+                      <SelectItem key={u.code} value={u.code}>
+                        {u.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <input type="hidden" name="cfdiUse" value={cfdiUse} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                  Método de pago
+                </Label>
+                <Select value={paymentMethod} onValueChange={setPaymentMethod} name="paymentMethod">
+                  <SelectTrigger>
+                    <SelectValue placeholder="PUE / PPD" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAYMENT_METHODS.map((m) => (
+                      <SelectItem key={m.code} value={m.code}>
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <input type="hidden" name="paymentMethod" value={paymentMethod} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                  Forma de pago
+                </Label>
+                <Select value={paymentForm} onValueChange={setPaymentForm} name="paymentForm">
+                  <SelectTrigger>
+                    <SelectValue placeholder="01 / 03 / 99…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAYMENT_FORMS.map((f) => (
+                      <SelectItem key={f.code} value={f.code}>
+                        {f.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <input type="hidden" name="paymentForm" value={paymentForm} />
+              </div>
+              <div className="space-y-1.5 md:col-span-3">
+                <div className="flex items-center justify-between">
+                  <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                    IVA aplicado
+                  </Label>
+                  {!ivaEditing ? (
+                    <button
+                      type="button"
+                      onClick={() => setIvaEditing(true)}
+                      className="text-[11px] text-clay hover:underline font-mono"
+                    >
+                      cambiar
+                    </button>
+                  ) : null}
+                </div>
+                {ivaEditing ? (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      name="ivaRate"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={ivaRate}
+                      onChange={(e) =>
+                        setIvaRate(parseFloat(e.target.value) || 0)
+                      }
+                      className="w-32"
+                    />
+                    <span className="text-[12px] text-ink-3 font-mono">%</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIvaRate(16);
+                        setIvaEditing(false);
+                      }}
+                      className="text-[11px] text-ink-3 hover:underline font-mono ml-2"
+                    >
+                      restablecer 16%
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-[13px] font-mono text-ink">
+                    {ivaRate}%
+                    <input type="hidden" name="ivaRate" value={ivaRate} />
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>
                 Términos y <em className="not-italic text-clay">notas</em>
               </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 md:col-span-2">
                 <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Términos de pago
+                  Términos de pago / crédito
                 </Label>
                 <Input
                   name="paymentTerms"
                   value={paymentTerms}
                   onChange={(e) => setPaymentTerms(e.target.value)}
-                  placeholder="30 días neto"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Dirección de entrega
-                </Label>
-                <Input
-                  name="deliveryAddress"
-                  value={deliveryAddress}
-                  onChange={(e) => setDeliveryAddress(e.target.value)}
-                  placeholder="Av. Principal 123, Almacén 4"
+                  placeholder="60 días"
                 />
               </div>
               <div className="space-y-1.5 md:col-span-2">
                 <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Notas
+                  Notas internas
                 </Label>
                 <Input
                   name="notes"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Instrucciones, contacto, recordatorios…"
+                  placeholder="Recordatorios, contactos, etc. (no salen impresas en el PDF)"
                 />
+              </div>
+              <div className="space-y-1.5 md:col-span-2">
+                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                  Observaciones
+                </Label>
+                <textarea
+                  name="observations"
+                  value={observations}
+                  onChange={(e) => setObservations(e.target.value)}
+                  placeholder="Favor de anexar la orden de compra con la factura."
+                  rows={2}
+                  className="flex w-full rounded-md border border-input bg-paper px-3 py-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring placeholder:text-ink-4 resize-y"
+                />
+                <p className="text-[11px] text-ink-4">
+                  Estas observaciones se imprimen en la OC PDF en la sección
+                  "Observaciones".
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -388,14 +637,42 @@ export default function NewOrder() {
           <div className="sticky bottom-0 -mx-2 px-2 pb-2">
             <div className="flex items-center justify-between gap-3 rounded-md border border-line bg-paper px-4 py-3 shadow-sm">
               <div className="text-[12px] text-ink-3 font-mono">
-                Total estimado:{" "}
-                <span className="text-ink font-semibold">
-                  {total.toLocaleString("es-MX", {
-                    style: "currency",
-                    currency: currency === "USD" ? "USD" : currency === "EUR" ? "EUR" : "MXN",
-                  })}
-                </span>{" "}
-                · {lines.length} línea{lines.length === 1 ? "" : "s"}
+                <span>
+                  Subtotal{" "}
+                  <span className="text-ink">
+                    {subtotal.toLocaleString("es-MX", {
+                      style: "currency",
+                      currency:
+                        currency === "USD" ? "USD" : currency === "EUR" ? "EUR" : "MXN",
+                    })}
+                  </span>
+                </span>
+                <span className="mx-2 text-ink-4">·</span>
+                <span>
+                  IVA {ivaRate}%{" "}
+                  <span className="text-ink">
+                    {(ivaCents / 100).toLocaleString("es-MX", {
+                      style: "currency",
+                      currency:
+                        currency === "USD" ? "USD" : currency === "EUR" ? "EUR" : "MXN",
+                    })}
+                  </span>
+                </span>
+                <span className="mx-2 text-ink-4">·</span>
+                <span>
+                  Total{" "}
+                  <span className="text-ink font-semibold">
+                    {total.toLocaleString("es-MX", {
+                      style: "currency",
+                      currency:
+                        currency === "USD" ? "USD" : currency === "EUR" ? "EUR" : "MXN",
+                    })}
+                  </span>
+                </span>
+                <span className="mx-2 text-ink-4">·</span>
+                <span>
+                  {lines.length} línea{lines.length === 1 ? "" : "s"}
+                </span>
               </div>
               <div className="flex items-center gap-2">
                 <Button variant="ghost" type="button" asChild>

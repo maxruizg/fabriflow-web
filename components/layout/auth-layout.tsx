@@ -36,6 +36,7 @@ const PRIMARY_NAV: NavItem[] = [
 
 const SECONDARY_NAV: NavItem[] = [
   { name: "Usuarios", href: "/users", icon: "vendors", permissions: ["*"] },
+  { name: "Empresa", href: "/settings/company", icon: "settings", permissions: [] },
 ];
 
 interface RouteCta {

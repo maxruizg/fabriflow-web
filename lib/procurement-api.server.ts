@@ -30,6 +30,8 @@ export interface OrderDocState {
   facInvoiceId: string | null;
   remUrl: string | null;
   ncUrl: string | null;
+  paymentId?: string | null;
+  paymentReceiptUrl?: string | null;
 }
 
 export interface OrderEvent {
@@ -64,6 +66,15 @@ export interface OrderBackend {
   notes?: string | null;
   paymentTerms?: string | null;
   deliveryAddress?: string | null;
+  // MX-billing fields (backend migration 005)
+  deliveryWarehouse?: string | null;
+  deliveryDate?: string | null;
+  requestingDepartment?: string | null;
+  cfdiUse?: string | null;
+  paymentMethod?: string | null;
+  paymentForm?: string | null;
+  observations?: string | null;
+  ivaRate?: number;
   status: OrderStatusBackend;
   docState: OrderDocState;
   history: OrderEvent[];
@@ -96,6 +107,43 @@ export interface CreateOrderPayload {
   notes?: string;
   paymentTerms?: string;
   deliveryAddress?: string;
+  deliveryWarehouse?: string;
+  deliveryDate?: string;
+  requestingDepartment?: string;
+  cfdiUse?: string;
+  paymentMethod?: string;
+  paymentForm?: string;
+  observations?: string;
+  ivaRate?: number;
+}
+
+// ----------------------------------------------------------------------------
+// Company (extended in migration 005 for logo branding)
+// ----------------------------------------------------------------------------
+
+export type CompanyStatusBackend = "activo" | "suspendido" | "pendiente";
+
+export interface CompanyBackend {
+  id: string;
+  name: string;
+  rfc: string;
+  email: string;
+  phone: string | null;
+  whatsappPhone?: string | null;
+  status: CompanyStatusBackend;
+  domain: string | null;
+  logoContentType?: string | null;
+  /** Short-lived signed URL minted by the backend; absent when no logo. */
+  logoUrl?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PatchCompanyPayload {
+  name?: string;
+  phone?: string;
+  whatsappPhone?: string;
+  domain?: string;
 }
 
 export interface CreateOrderResponse {
@@ -357,6 +405,24 @@ export function createOrder(
   );
 }
 
+export function deleteOrder(
+  token: string,
+  companyId: string,
+  orderId: string,
+): Promise<{ message: string; id: string }> {
+  return apiRequest<{ message: string; id: string }>(
+    `/api/orders/${encodeURIComponent(orderId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+      },
+    },
+    token,
+  );
+}
+
 export function authorizeOrder(
   token: string,
   companyId: string,
@@ -399,6 +465,78 @@ export function sendOrder(
   );
 }
 
+/** Saldo de una factura: total facturado, ya pagado y lo que falta por cobrar. */
+export interface InvoiceBalance {
+  total: number;
+  paid: number;
+  outstanding: number;
+  currency: string;
+}
+
+/** Upload a doc (OC/REM/NC) attached to an order. */
+export async function uploadOrderDoc(
+  token: string,
+  companyId: string,
+  orderId: string,
+  kind: "oc" | "rem" | "nc",
+  file: File,
+): Promise<OrderBackend> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiRequest<OrderBackend>(
+    `/api/orders/${encodeURIComponent(orderId)}/docs/${kind}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        // Do NOT set Content-Type — fetch will set the multipart boundary.
+      },
+      body: fd,
+    },
+    token,
+  );
+}
+
+/**
+ * Upload de comprobante de pago: el backend extrae el monto, valida contra el
+ * saldo pendiente y devuelve la orden actualizada + el saldo posterior.
+ */
+export async function uploadPaymentReceipt(
+  token: string,
+  companyId: string,
+  orderId: string,
+  file: File,
+): Promise<{ order: OrderBackend; balance: InvoiceBalance }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiRequest<{ order: OrderBackend; balance: InvoiceBalance }>(
+    `/api/orders/${encodeURIComponent(orderId)}/docs/pago`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+      },
+      body: fd,
+    },
+    token,
+  );
+}
+
+/** Lectura independiente del saldo (para vistas que no acaban de subir un comprobante). */
+export function fetchInvoiceBalance(
+  token: string,
+  companyId: string,
+  invoiceId: string,
+): Promise<InvoiceBalance> {
+  return apiRequest<InvoiceBalance>(
+    `/api/invoices/${encodeURIComponent(invoiceId)}/balance`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
 export function fetchOrderPdfUrl(
   token: string,
   companyId: string,
@@ -416,6 +554,87 @@ export function fetchPublicOrder(token: string): Promise<PublicOrderResponse> {
   return apiRequest<PublicOrderResponse>(
     `/api/public/orders/${encodeURIComponent(token)}`,
     {},
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Company endpoints
+// ----------------------------------------------------------------------------
+
+export function fetchCompany(
+  token: string,
+  companyId: string,
+): Promise<CompanyBackend> {
+  return apiRequest<CompanyBackend>(
+    `/api/companies/${encodeURIComponent(companyId)}`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
+export function patchCompany(
+  token: string,
+  companyId: string,
+  payload: PatchCompanyPayload,
+): Promise<CompanyBackend> {
+  return apiRequest<CompanyBackend>(
+    `/api/companies/${encodeURIComponent(companyId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
+/**
+ * Upload (or replace) the company logo.
+ *
+ * `file` must be a PNG or JPEG ≤ 2 MB. The backend rejects other formats
+ * with a 400. Returns the updated Company including a fresh `logoUrl`.
+ */
+export async function uploadCompanyLogo(
+  token: string,
+  companyId: string,
+  file: File,
+): Promise<CompanyBackend> {
+  const fd = new FormData();
+  fd.append("logo", file);
+  return apiRequest<CompanyBackend>(
+    `/api/companies/${encodeURIComponent(companyId)}/logo`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        // Note: do NOT set Content-Type — fetch will set the multipart
+        // boundary automatically.
+      },
+      body: fd,
+    },
+    token,
+  );
+}
+
+export async function deleteCompanyLogo(
+  token: string,
+  companyId: string,
+): Promise<void> {
+  await apiRequest<void>(
+    `/api/companies/${encodeURIComponent(companyId)}/logo`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+      },
+    },
+    token,
   );
 }
 
@@ -507,6 +726,171 @@ export function fetchVendorScorecard(
   return apiRequest<VendorScorecard>(
     `/api/vendors/${encodeURIComponent(vendorId)}/scorecard`,
     withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
+// ============================================================================
+// Roles & permission overrides (Discord-style RBAC)
+// ============================================================================
+
+export interface RoleBackend {
+  id: string;
+  company: string;
+  name: string;
+  permissions: string[];
+  color: string | null;
+  isSystemRole: boolean;
+  isDeletable: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateRolePayload {
+  name: string;
+  permissions?: string[];
+  color?: string;
+}
+
+export interface UpdateRolePayload {
+  name?: string;
+  permissions?: string[];
+  color?: string;
+}
+
+export interface PermissionOverride {
+  userId: string;
+  companyId: string;
+  permission: string;
+  granted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpdateOverridesPayload {
+  overrides: { permission: string; granted: boolean }[];
+}
+
+export function fetchRoles(
+  token: string,
+  companyId: string,
+): Promise<RoleBackend[]> {
+  return apiRequest<RoleBackend[]>(
+    `/api/roles`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
+export function createRole(
+  token: string,
+  companyId: string,
+  payload: CreateRolePayload,
+): Promise<RoleBackend> {
+  return apiRequest<RoleBackend>(
+    `/api/roles`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
+export function updateRole(
+  token: string,
+  companyId: string,
+  roleId: string,
+  payload: UpdateRolePayload,
+): Promise<RoleBackend> {
+  return apiRequest<RoleBackend>(
+    `/api/roles/${encodeURIComponent(roleId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
+export function deleteRole(
+  token: string,
+  companyId: string,
+  roleId: string,
+): Promise<void> {
+  return apiRequest<void>(
+    `/api/roles/${encodeURIComponent(roleId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+      },
+    },
+    token,
+  );
+}
+
+export function fetchUserOverrides(
+  token: string,
+  companyId: string,
+  userId: string,
+): Promise<PermissionOverride[]> {
+  return apiRequest<PermissionOverride[]>(
+    `/api/users/${encodeURIComponent(userId)}/permission-overrides`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
+export function updateUserOverrides(
+  token: string,
+  companyId: string,
+  userId: string,
+  payload: UpdateOverridesPayload,
+): Promise<{ message: string }> {
+  return apiRequest<{ message: string }>(
+    `/api/users/${encodeURIComponent(userId)}/permission-overrides`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
+export function changeUserRole(
+  token: string,
+  companyId: string,
+  userId: string,
+  roleId: string,
+): Promise<{ message: string }> {
+  return apiRequest<{ message: string }>(
+    `/api/users/${encodeURIComponent(userId)}/role`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ roleId }),
+    },
     token,
   );
 }

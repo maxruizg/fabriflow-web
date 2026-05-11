@@ -344,6 +344,12 @@ export interface InvoiceBackend {
   pdfUrl?: string;
   xmlUrl?: string;
   ordenCompraUrl?: string;
+  // Storage keys — siempre presentes en el payload de listado/detalle.
+  // Las `*Url` arriba sólo vienen de `GET /api/invoices/{id}/urls` o `/document`,
+  // así que para "tiene PDF/XML/OC" hay que mirar las KEYS.
+  pdfKey?: string | null;
+  xmlKey?: string | null;
+  ordenCompraKey?: string | null;
   // Purchase Order relationship (new flow)
   purchaseOrder?: string;  // ID de la orden de compra
   orderFolio?: string;      // Folio de la OC

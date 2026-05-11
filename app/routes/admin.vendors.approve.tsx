@@ -31,15 +31,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
-  // Extract just the ID without the prefix
-  const cleanUserId = userId.includes(":") ? userId.split(":")[1] : userId;
-  const cleanCompanyId = companyId.includes(":") ? companyId.split(":")[1] : companyId;
-
   return json({
     error: null,
     user,
-    userId: cleanUserId,
-    companyId: cleanCompanyId,
+    userId,
+    companyId,
   });
 }
 

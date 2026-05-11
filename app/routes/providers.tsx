@@ -1,10 +1,21 @@
-import type { MetaFunction, LoaderFunctionArgs } from "@remix-run/cloudflare";
-import { useLoaderData, useRevalidator, useSearchParams } from "@remix-run/react";
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "@remix-run/cloudflare";
+import {
+  useFetcher,
+  useLoaderData,
+  useRevalidator,
+  useSearchParams,
+} from "@remix-run/react";
 import { json } from "@remix-run/cloudflare";
 import { AuthLayout } from "~/components/layout/auth-layout";
 import { Button } from "~/components/ui/button";
 import { Card } from "~/components/ui/card";
 import { Input } from "~/components/ui/input";
+import { Label } from "~/components/ui/label";
+import { Alert, AlertDescription } from "~/components/ui/alert";
 import {
   Table,
   TableBody,
@@ -24,18 +35,25 @@ import { Badge } from "~/components/ui/badge";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Separator } from "~/components/ui/separator";
 import { Icon } from "~/components/ui/icon";
-import { Building2, RefreshCw } from "lucide-react";
-import { requireUser, getFullSession } from "~/lib/session.server";
-import { fetchAllInvoices } from "~/lib/api.server";
+import { Building2, RefreshCw, UserPlus } from "lucide-react";
+import {
+  getAccessTokenFromSession,
+  requireUser,
+  getFullSession,
+} from "~/lib/session.server";
+import { fetchAllInvoices, sendVendorInvite } from "~/lib/api.server";
+import { fetchActiveVendors } from "~/lib/procurement-api.server";
 import type { InvoiceBackend } from "~/types";
 import { DataLoadError } from "~/components/ui/error-state";
 import { cn } from "~/lib/utils";
-import { useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 export const meta: MetaFunction = () => {
   return [
@@ -77,9 +95,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   try {
-    // Obtener todas las facturas para extraer proveedores únicos
-    const response = await fetchAllInvoices(session.accessToken, user.company, { limit: 1000 });
-    const invoices = response.data;
+    // Cargamos en paralelo: facturas (para agregados $/conteos por RFC) y
+    // vendors registrados (para incluir proveedores activos sin facturación
+    // todavía — p.ej. recién aceptaron una invitación). Si fetchActiveVendors
+    // falla no rompemos la página: caemos al directorio histórico de facturas.
+    const [invoiceResp, activeVendors] = await Promise.all([
+      fetchAllInvoices(session.accessToken, user.company, { limit: 1000 }),
+      fetchActiveVendors(session.accessToken, user.company).catch((e) => {
+        console.error("[providers] fetchActiveVendors failed:", e);
+        return [] as Awaited<ReturnType<typeof fetchActiveVendors>>;
+      }),
+    ]);
+    const invoices = invoiceResp.data;
 
     // Agrupar por proveedor (RFC)
     const providerMap = new Map<string, ProviderSummary>();
@@ -120,8 +147,33 @@ export async function loader({ request }: LoaderFunctionArgs) {
       }
     }
 
-    const providers = Array.from(providerMap.values())
-      .sort((a, b) => b.totalMXN + b.totalUSD - (a.totalMXN + a.totalUSD));
+    // Mezclar proveedores activos sin facturación todavía. RFC es la llave
+    // canónica del agregado por facturas (rfcEmisor) y también del vendor.
+    for (const vendor of activeVendors) {
+      const rfc = vendor.rfc?.toUpperCase();
+      if (!rfc || providerMap.has(rfc)) continue;
+      providerMap.set(rfc, {
+        rfc,
+        nombre: vendor.name,
+        facturas: 0,
+        totalMXN: 0,
+        totalUSD: 0,
+        ultimaFactura: "",
+        estados: { pendiente: 0, recibido: 0, pagado: 0, completado: 0, rechazado: 0 },
+      });
+    }
+
+    const providers = Array.from(providerMap.values()).sort((a, b) => {
+      // Proveedores con facturación primero, ordenados por monto total. Los
+      // recién registrados (sin facturas) caen al final, alfabéticamente.
+      const aBilled = a.facturas > 0;
+      const bBilled = b.facturas > 0;
+      if (aBilled !== bBilled) return aBilled ? -1 : 1;
+      const aTotal = a.totalMXN + a.totalUSD;
+      const bTotal = b.totalMXN + b.totalUSD;
+      if (aTotal !== bTotal) return bTotal - aTotal;
+      return a.nombre.localeCompare(b.nombre);
+    });
 
     return json({ providers, error: null, user });
   } catch (error) {
@@ -131,6 +183,57 @@ export async function loader({ request }: LoaderFunctionArgs) {
       user,
       error: "Error al cargar proveedores",
     });
+  }
+}
+
+type InviteActionData =
+  | { ok: true; shareLink: string; expiresAt: string }
+  | { ok: false; error: string };
+
+export async function action({
+  request,
+}: ActionFunctionArgs): Promise<ReturnType<typeof json<InviteActionData>>> {
+  const user = await requireUser(request);
+  const companyId = user.company;
+  if (!companyId) {
+    return json<InviteActionData>(
+      { ok: false, error: "Selecciona una empresa antes de invitar proveedores." },
+      { status: 400 },
+    );
+  }
+
+  const accessToken = await getAccessTokenFromSession(request);
+  if (!accessToken) {
+    return json<InviteActionData>(
+      { ok: false, error: "Sesión expirada. Vuelve a iniciar sesión." },
+      { status: 401 },
+    );
+  }
+
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+  if (intent !== "invite-vendor") {
+    return json<InviteActionData>({ ok: false, error: "Acción desconocida" }, { status: 400 });
+  }
+
+  const email = String(formData.get("email") ?? "").trim();
+  if (!email || !email.includes("@")) {
+    return json<InviteActionData>(
+      { ok: false, error: "Ingresa un correo válido." },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await sendVendorInvite(email, accessToken, companyId);
+    return json<InviteActionData>({
+      ok: true,
+      shareLink: result.shareLink,
+      expiresAt: result.expiresAt,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "No se pudo enviar la invitación.";
+    return json<InviteActionData>({ ok: false, error: message }, { status: 500 });
   }
 }
 
@@ -191,6 +294,9 @@ export default function Providers() {
   const [selectedProvider, setSelectedProvider] = useState<ProviderSummary | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
 
+  // Invite dialog
+  const [inviteOpen, setInviteOpen] = useState(false);
+
   // Aplicar filtros localmente
   const filteredProviders = providers.filter(provider => {
     const matchesSearch = !searchFilter ||
@@ -243,18 +349,33 @@ export default function Providers() {
               Proveedores <em>activos</em>
             </h1>
             <p className="ff-page-sub">
-              Directorio agregado por facturación
+              Directorio de proveedores activos
             </p>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => revalidator.revalidate()}
-            disabled={revalidator.state === "loading"}
-            title="Actualizar"
-          >
-            <RefreshCw className={cn("h-4 w-4", revalidator.state === "loading" && "animate-spin")} />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="clay"
+              size="sm"
+              onClick={() => setInviteOpen(true)}
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Invitar proveedor
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => revalidator.revalidate()}
+              disabled={revalidator.state === "loading"}
+              title="Actualizar"
+            >
+              <RefreshCw
+                className={cn(
+                  "h-4 w-4",
+                  revalidator.state === "loading" && "animate-spin",
+                )}
+              />
+            </Button>
+          </div>
         </header>
 
         {/* Inline summary strip */}
@@ -386,7 +507,11 @@ export default function Providers() {
                         )}
                       </TableCell>
                       <TableCell className="py-2.5 text-[12px] font-mono text-ink-3">
-                        {fmtDate(provider.ultimaFactura)}
+                        {provider.facturas === 0 ? (
+                          <Badge tone="rust">Sin facturas</Badge>
+                        ) : (
+                          fmtDate(provider.ultimaFactura)
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -398,7 +523,7 @@ export default function Providers() {
                       <p className="font-medium text-ink-2">No se encontraron proveedores</p>
                       <p className="text-[12px] mt-1">
                         {providers.length === 0
-                          ? "Aún no hay facturas registradas"
+                          ? "Aún no hay proveedores registrados — invita al primero con el botón de arriba"
                           : "Intenta ajustar los filtros de búsqueda"
                         }
                       </p>
@@ -496,6 +621,175 @@ export default function Providers() {
           )}
         </DialogContent>
       </Dialog>
+
+      <InviteVendorDialog open={inviteOpen} onOpenChange={setInviteOpen} />
     </AuthLayout>
+  );
+}
+
+function InviteVendorDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const fetcher = useFetcher<InviteActionData>();
+  const [email, setEmail] = useState("");
+  const [copied, setCopied] = useState(false);
+  const submitting = fetcher.state !== "idle";
+  const data = fetcher.data;
+
+  useEffect(() => {
+    if (!open) {
+      setEmail("");
+      setCopied(false);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (data && "ok" in data && data.ok) setCopied(false);
+  }, [data]);
+
+  const success = data && "ok" in data && data.ok ? data : null;
+  const error = data && "ok" in data && !data.ok ? data.error : null;
+
+  const handleCopy = async () => {
+    if (!success) return;
+    try {
+      await navigator.clipboard.writeText(success.shareLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard API can fail in insecure contexts; the input is selectable as fallback */
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle className="font-display text-[20px]">
+            Invitar proveedor
+          </DialogTitle>
+          <DialogDescription className="text-[13px] text-ink-3">
+            Le enviaremos un enlace personalizado para que se registre en tu
+            empresa. Podrá completar sus datos manualmente o subir su Constancia
+            de Situación Fiscal para autollenarlos.
+          </DialogDescription>
+        </DialogHeader>
+
+        {success ? (
+          <div className="space-y-4">
+            <Alert className="bg-moss-soft border-moss/20">
+              <Icon name="check" size={14} className="text-moss-deep" />
+              <AlertDescription className="text-[12.5px] text-moss-deep">
+                Invitación enviada. También puedes compartir el enlace
+                manualmente.
+              </AlertDescription>
+            </Alert>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                Enlace de invitación
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  readOnly
+                  value={success.shareLink}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="h-9 text-[12px] font-mono"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopy}
+                  className="h-9 shrink-0"
+                >
+                  {copied ? "Copiado" : "Copiar"}
+                </Button>
+              </div>
+              <p className="text-[11px] text-ink-3">
+                El enlace expira el{" "}
+                {new Date(success.expiresAt).toLocaleDateString("es-MX", {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                })}
+                .
+              </p>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="clay"
+                onClick={() => onOpenChange(false)}
+                className="h-10"
+              >
+                Listo
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <fetcher.Form method="post" className="space-y-4">
+            <input type="hidden" name="intent" value="invite-vendor" />
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="invite-email"
+                className="text-[11px] font-medium uppercase tracking-wider text-ink-3"
+              >
+                Correo del proveedor *
+              </Label>
+              <Input
+                id="invite-email"
+                name="email"
+                type="email"
+                placeholder="proveedor@empresa.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoFocus
+                disabled={submitting}
+                className="h-10 text-sm"
+              />
+            </div>
+            {error ? (
+              <Alert className="bg-wine-soft border-wine/20">
+                <Icon name="warn" size={14} className="text-wine" />
+                <AlertDescription className="text-[12px] text-wine">
+                  {error}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            <DialogFooter className="gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={submitting}
+                className="h-10"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                variant="clay"
+                disabled={submitting}
+                className="h-10"
+              >
+                {submitting ? (
+                  <>
+                    <span className="mr-2 h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    Enviando…
+                  </>
+                ) : (
+                  "Enviar invitación"
+                )}
+              </Button>
+            </DialogFooter>
+          </fetcher.Form>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

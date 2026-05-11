@@ -20,10 +20,15 @@ import { useUser } from "~/lib/auth-context";
 import { useRole } from "~/lib/role-context";
 import { cn } from "~/lib/utils";
 import {
+  fetchActiveVendors,
+  fetchInvoiceBalance,
   fetchOrders,
+  type ActiveVendorSummary,
+  type InvoiceBalance,
   type OrderBackend,
   type OrderStatusBackend,
 } from "~/lib/procurement-api.server";
+// `OrderBackend` is referenced in the loader's typed json fallback below.
 import {
   fmtCurrency,
   fmtDate,
@@ -75,14 +80,10 @@ export const handle = {
   crumb: ["Operación", "Órdenes"],
 };
 
-// SurrealId values (e.g. "company:abc") arrive prefixed; strip for display + ids.
-function stripPrefix(id: string, table: string): string {
-  const prefix = `${table}:`;
-  const trimmed = id.startsWith(prefix) ? id.slice(prefix.length) : id;
-  return trimmed.replace(/[⟨⟩\\]/g, "");
-}
-
 const STATUS_LABEL: Record<OrderStatusBackend, string> = {
+  creada: "Creada",
+  autorizada: "Autorizada",
+  facturada: "Facturada",
   recibido: "Recibido",
   en_transito: "En tránsito",
   confirmado: "Confirmado",
@@ -93,35 +94,61 @@ const STATUS_LABEL: Record<OrderStatusBackend, string> = {
   rechazado: "Rechazado",
 };
 
+function stripCompanyPrefix(id: string): string {
+  return id.startsWith("company:") ? id.slice("company:".length) : id;
+}
+
 const CURRENCY_FALLBACK: SampleOrder["cur"] = "MXN";
 function normalizeCurrency(c: string): SampleOrder["cur"] {
   if (c === "USD" || c === "EUR" || c === "MXN") return c;
   return CURRENCY_FALLBACK;
 }
 
-function toSampleShape(o: OrderBackend): SampleOrder {
+function toSampleShape(
+  o: OrderBackend,
+  vendorNameById: Map<string, string>,
+  invoiceBalances: Map<string, InvoiceBalance>,
+): SampleOrder {
   const docs: DocType[] = [];
-  if (o.docState.ocUrl) docs.push("OC");
+  // The OC is the order itself — once a row exists, the OC document exists,
+  // even if the backend hasn't materialized the PDF yet (`docState.ocUrl` is
+  // populated lazily on first /pdf or /send call). Always show its chip as
+  // active so operators can tell at a glance the OC is in hand.
+  docs.push("OC");
   if (o.docState.facInvoiceId) docs.push("FAC");
   if (o.docState.remUrl) docs.push("REM");
   if (o.docState.ncUrl) docs.push("NC");
+  if (o.docState.paymentReceiptUrl) docs.push("PAGO");
 
-  // The vendor field is a SurrealId reference. Until a vendor-name join lands
-  // on the backend, use the bare id for both the display label and the filter
-  // key. The dropdown will still group orders by vendor correctly.
-  const vendorId = stripPrefix(o.vendor, "company");
+  const vendorId = stripCompanyPrefix(o.vendor);
+  const vendorName =
+    vendorNameById.get(vendorId) ?? "Proveedor desconocido";
+
+  // `o.amount` viene del backend como SUBTOTAL (suma de line_total sin IVA).
+  // Para la UI mostramos el TOTAL con IVA — eso es lo que el usuario ve en
+  // el PDF y lo que se compara contra la factura. iva_rate default 16 %.
+  const ivaRate = typeof o.ivaRate === "number" ? o.ivaRate : 16;
+  const totalWithTax = Math.round(o.amount * (1 + ivaRate / 100) * 100) / 100;
+
+  const invoiceBalance = o.docState.facInvoiceId
+    ? invoiceBalances.get(o.docState.facInvoiceId) ?? null
+    : null;
 
   return {
-    id: stripPrefix(o.id, "order"),
-    vendor: vendorId,
+    id: o.id,
+    vendor: vendorName,
     vendorId,
     date: o.date,
     due: o.due ?? "",
-    amount: o.amount,
+    amount: totalWithTax,
     cur: normalizeCurrency(o.currency),
     status: STATUS_LABEL[o.status] ?? o.status,
     items: o.itemsCount,
     docs,
+    history: o.history,
+    docState: o.docState,
+    folio: o.folio,
+    invoiceBalance,
   };
 }
 
@@ -130,14 +157,58 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const session = await getFullSession(request);
 
   if (!session?.accessToken || !user.company) {
-    return json({ orders: [] as SampleOrder[] });
+    return json({
+      orders: [] as SampleOrder[],
+      ordersRaw: [] as OrderBackend[],
+      vendors: [] as ActiveVendorSummary[],
+    });
   }
 
   try {
-    const response = await fetchOrders(session.accessToken, user.company, {
-      limit: 50,
+    const [response, vendors] = await Promise.all([
+      fetchOrders(session.accessToken, user.company, { limit: 50 }),
+      fetchActiveVendors(session.accessToken, user.company).catch(
+        (e: unknown) => {
+          console.warn("[orders] fetchActiveVendors failed:", e);
+          return [] as ActiveVendorSummary[];
+        },
+      ),
+    ]);
+    const vendorNameById = new Map<string, string>();
+    for (const v of vendors) vendorNameById.set(v.id, v.name);
+
+    // Para cada OC con factura vinculada, traemos el saldo en paralelo. Es
+    // no-fatal: si una falla, esa OC simplemente no muestra balance. Reuso
+    // el Map para evitar fetches duplicados si dos OCs comparten factura.
+    const invoiceIds = Array.from(
+      new Set(
+        response.data
+          .map((o) => o.docState.facInvoiceId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const balancePairs = await Promise.all(
+      invoiceIds.map((id) =>
+        fetchInvoiceBalance(session.accessToken!, user.company!, id)
+          .then((bal) => [id, bal] as const)
+          .catch((e: unknown) => {
+            console.warn(`[orders] fetchInvoiceBalance(${id}) failed:`, e);
+            return null;
+          }),
+      ),
+    );
+    const invoiceBalances = new Map<string, InvoiceBalance>();
+    for (const pair of balancePairs) {
+      if (pair) invoiceBalances.set(pair[0], pair[1]);
+    }
+
+    return json({
+      orders: response.data.map((o) =>
+        toSampleShape(o, vendorNameById, invoiceBalances),
+      ),
+      ordersRaw: response.data,
+      vendors,
     });
-    return json({ orders: response.data.map(toSampleShape) });
   } catch (error) {
     console.error("[orders] fetchOrders failed:", error);
     const status =
@@ -181,9 +252,19 @@ function matchesFilter(o: SampleOrder, f: StatusFilter): boolean {
 }
 
 export default function OrdersPage() {
-  const { orders } = useLoaderData<typeof loader>();
+  const { orders, ordersRaw, vendors } = useLoaderData<typeof loader>();
   const { user } = useUser();
   const { role } = useRole();
+  const orderBackendById = useMemo(() => {
+    const m = new Map<string, OrderBackend>();
+    for (const o of ordersRaw) m.set(o.id, o);
+    return m;
+  }, [ordersRaw]);
+  const vendorContactById = useMemo(() => {
+    const m = new Map<string, ActiveVendorSummary>();
+    for (const v of vendors) m.set(v.id, v);
+    return m;
+  }, [vendors]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [vendorFilter, setVendorFilter] = useState<string>("all");
@@ -238,6 +319,12 @@ export default function OrdersPage() {
   }, [orders, statusFilter, vendorFilter, currencyFilter, search]);
 
   const selected = orders.find((o) => o.id === selectedId) ?? null;
+  const selectedBackend = selectedId
+    ? orderBackendById.get(selectedId) ?? null
+    : null;
+  const selectedVendor = selectedBackend
+    ? vendorContactById.get(stripCompanyPrefix(selectedBackend.vendor)) ?? null
+    : null;
   const totalAmount = filtered.reduce((acc, o) => acc + o.amount, 0);
 
   const isVendor = role === "vendor";
@@ -247,10 +334,10 @@ export default function OrdersPage() {
 
   return (
     <AuthLayout>
-      <div className="space-y-5">
+      <div className="flex flex-col h-full min-h-0 min-w-0 max-w-full gap-4 overflow-hidden">
         {/* Page header */}
-        <header className="flex flex-wrap items-end justify-between gap-3">
-          <div>
+        <header className="flex flex-wrap items-end justify-between gap-3 min-w-0 shrink-0">
+          <div className="min-w-0">
             <h1 className="ff-page-title">
               Órdenes de <em>compra</em>
             </h1>
@@ -275,14 +362,14 @@ export default function OrdersPage() {
           </div>
         </header>
 
-        <Toolbar>
+        <Toolbar className="min-w-0 flex-wrap shrink-0">
           <Toolbar.Search
             value={search}
             onChange={setSearch}
             placeholder="Folio, proveedor, artículo…"
           />
           <Select value={vendorFilter} onValueChange={setVendorFilter}>
-            <SelectTrigger className="w-[200px] h-9">
+            <SelectTrigger className="w-[180px] h-9">
               <SelectValue placeholder="Proveedores" />
             </SelectTrigger>
             <SelectContent>
@@ -320,8 +407,9 @@ export default function OrdersPage() {
         <Tabs
           value={statusFilter}
           onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+          className="flex-1 min-h-0 flex flex-col"
         >
-          <TabsList>
+          <TabsList className="shrink-0">
             {STATUS_FILTERS.map((s) => (
               <TabsTrigger key={s.value} value={s.value}>
                 {s.label}
@@ -329,20 +417,24 @@ export default function OrdersPage() {
               </TabsTrigger>
             ))}
           </TabsList>
-          <TabsContent value={statusFilter} className="mt-4">
-            <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
-              <Card>
-                <div className="overflow-auto">
-                  <Table>
+          <TabsContent
+            value={statusFilter}
+            className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col"
+          >
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,380px)] min-w-0 flex-1 min-h-0">
+              <Card className="min-w-0 overflow-hidden flex flex-col min-h-0">
+                <div className="min-w-0 flex-1 overflow-y-auto">
+                  <Table className="w-full table-fixed">
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Orden</TableHead>
+                        <TableHead className="w-[110px]">Orden</TableHead>
                         <TableHead>Proveedor</TableHead>
-                        <TableHead>Fecha</TableHead>
-                        <TableHead>Vence</TableHead>
-                        <TableHead>Docs</TableHead>
-                        <TableHead className="text-right">Importe</TableHead>
-                        <TableHead>Estado</TableHead>
+                        <TableHead className="w-[110px]">Fecha</TableHead>
+                        <TableHead className="w-[120px]">Docs</TableHead>
+                        <TableHead className="w-[140px] text-right">
+                          Importe
+                        </TableHead>
+                        <TableHead className="w-[110px] pr-4">Estado</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -350,51 +442,68 @@ export default function OrdersPage() {
                         const m = fmtCurrency(o.amount, o.cur);
                         const tone = STATUS_TONE[o.status] ?? "ink";
                         const active = o.id === selectedId;
+                        const showCurrency = o.cur !== "MXN";
                         return (
                           <TableRow
                             key={o.id}
                             data-state={active ? "selected" : undefined}
                             className={cn(
-                              "cursor-pointer",
+                              "cursor-pointer hover:bg-paper-2",
                               active && "bg-paper-3",
                             )}
                             onClick={() => setSelectedId(o.id)}
                           >
                             <TableCell className="font-mono text-[12px]">
-                              {o.id}
+                              <div
+                                className="font-medium text-ink truncate"
+                                title={o.folio || o.id}
+                              >
+                                {o.folio || "—"}
+                              </div>
                             </TableCell>
-                            <TableCell className="truncate max-w-[200px]">
-                              {o.vendor}
+                            <TableCell>
+                              <div className="truncate" title={o.vendor}>
+                                {o.vendor}
+                              </div>
                             </TableCell>
-                            <TableCell className="font-mono text-[12px] text-ink-3">
-                              {fmtDate(o.date)}
-                            </TableCell>
-                            <TableCell className="font-mono text-[12px] text-ink-3">
-                              {fmtDate(o.due)}
+                            <TableCell className="font-mono text-[11.5px] text-ink-3">
+                              <div className="truncate" title={`Emitida ${fmtDate(o.date)}`}>
+                                {fmtDate(o.date)}
+                              </div>
+                              <div
+                                className="truncate text-[10.5px] text-ink-4"
+                                title={`Vence ${fmtDate(o.due)}`}
+                              >
+                                vence {fmtDate(o.due)}
+                              </div>
                             </TableCell>
                             <TableCell>
                               <DocStrip docs={o.docs} />
                             </TableCell>
                             <TableCell className="text-right">
-                              <span className="font-mono font-medium">
+                              <div className="font-mono font-medium truncate">
                                 {m.symbol}
                                 {m.integer}
-                                <span className="text-ink-3">
-                                  .{m.decimal}
-                                </span>
-                              </span>
-                              <span className="ml-1 font-mono text-[10px] text-ink-3">
-                                {m.code}
-                              </span>
+                                <span className="text-ink-3">.{m.decimal}</span>
+                              </div>
+                              {showCurrency ? (
+                                <div className="font-mono text-[10px] text-ink-3 truncate">
+                                  {m.code}
+                                </div>
+                              ) : null}
                             </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
+                            <TableCell className="pr-4">
+                              <div className="flex items-center gap-1.5 min-w-0">
                                 <Badge tone={tone}>{o.status}</Badge>
-                                {o.status === "creada" && (
-                                  <span className="text-[11px] text-rust-700 font-medium">
-                                    Pendiente autorización
+                                {o.status === "Creada" ? (
+                                  <span
+                                    className="text-rust-700 shrink-0"
+                                    title="Pendiente de autorización por un Super Admin"
+                                    aria-label="Pendiente de autorización por un Super Admin"
+                                  >
+                                    <Icon name="warn" size={12} />
                                   </span>
-                                )}
+                                ) : null}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -403,7 +512,7 @@ export default function OrdersPage() {
                       {filtered.length === 0 ? (
                         <TableRow>
                           <TableCell
-                            colSpan={7}
+                            colSpan={6}
                             className="text-center py-14"
                           >
                             <Icon
@@ -425,7 +534,13 @@ export default function OrdersPage() {
                 </div>
               </Card>
 
-              <OrderDetailPanel order={selected} />
+              <OrderDetailPanel
+                key={selectedId ?? "empty"}
+                order={selected}
+                backend={selectedBackend}
+                vendorContact={selectedVendor}
+                userPermissions={user?.permissions ?? []}
+              />
             </div>
           </TabsContent>
         </Tabs>

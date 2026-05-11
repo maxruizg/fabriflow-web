@@ -18,7 +18,7 @@ import {
   createInvoice,
   uploadCompleteInvoice,
 } from "~/lib/api.server";
-import { getAvailableOrdersForInvoice } from "~/lib/procurement-api.server";
+import { fetchOrder, getAvailableOrdersForInvoice } from "~/lib/procurement-api.server";
 import { useState, useCallback, useEffect } from "react";
 import type { InvoiceDetailBackend } from "~/types";
 import { cn } from "~/lib/utils";
@@ -56,6 +56,28 @@ export async function loader({ request }: LoaderFunctionArgs) {
     user.company,
     user.company  // vendorId = company del usuario vendor
   );
+
+  // Si llegamos con ?orderId=... (típicamente desde el detalle de la OC) y la orden no
+  // está en la lista de "disponibles para facturar" (porque el filtro se hace por vendor
+  // y este usuario está del lado comprador), hidratamos la orden directamente y la
+  // anteponemos a la lista para que el selector pueda preseleccionarla.
+  if (orderId && !availableOrders.some((o) => o.id === orderId)) {
+    try {
+      const ord = await fetchOrder(session.accessToken, user.company, orderId);
+      const bareId = ord.id.startsWith("order:") ? ord.id.slice("order:".length) : ord.id;
+      availableOrders.unshift({
+        id: bareId,
+        folio: ord.folio,
+        date: ord.date,
+        amount: ord.amount,
+        currency: ord.currency,
+        itemsCount: ord.itemsCount ?? ord.items?.length ?? 0,
+        hasInvoice: Boolean(ord.docState?.facInvoiceId),
+      });
+    } catch (err) {
+      console.warn("[invoices/new] no se pudo hidratar la OC preseleccionada:", err);
+    }
+  }
 
   return json({
     user,
@@ -153,6 +175,7 @@ export async function action({ request }: ActionFunctionArgs) {
         invoice: result.invoice,
         validationDetails: result.validationDetails,
         matchReport: result.matchReport,
+        mismatchSummary: result.mismatchSummary,
       });
     } catch (error) {
       const err = error as Error;

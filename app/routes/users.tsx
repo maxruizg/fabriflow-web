@@ -19,10 +19,11 @@ import {
   TableHeader,
   TableRow,
 } from "~/components/ui/table";
+import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Icon } from "~/components/ui/icon";
 import { StatCard } from "~/components/ui/stat-card";
-import { Edit, Trash2, UserPlus } from "lucide-react";
+import { Edit, Mail, Trash2, UserPlus } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
   Dialog,
@@ -136,7 +137,7 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     if (!name || !email || !role) {
-      return json({ success: false, error: "Todos los campos son requeridos" }, { status: 400 });
+      return json({ success: false, intent: "create", error: "Todos los campos son requeridos" }, { status: 400 });
     }
 
     try {
@@ -153,11 +154,40 @@ export async function action({ request }: ActionFunctionArgs) {
         session.accessToken
       );
 
-      return json({ success: true, message: "Usuario creado exitosamente" });
+      return json({ success: true, intent: "create", message: `Invitación enviada a ${email}` });
     } catch (error) {
       console.error("Error creating user:", error);
       const errorMessage = error instanceof Error ? error.message : "Error al crear usuario";
-      return json({ success: false, error: errorMessage }, { status: 500 });
+      return json({ success: false, intent: "create", error: errorMessage }, { status: 500 });
+    }
+  }
+
+  if (intent === "resendInvitation") {
+    const userId = formData.get("userId") as string;
+
+    if (!userId) {
+      return json({ success: false, intent: "resendInvitation", error: "ID de usuario requerido" }, { status: 400 });
+    }
+
+    try {
+      const cleanUserId = userId.replace("user:", "");
+
+      await apiRequest(
+        `/api/users/${cleanUserId}/resend-invitation`,
+        {
+          method: "POST",
+          headers: {
+            "X-Company-Id": user.company,
+          },
+        },
+        session.accessToken
+      );
+
+      return json({ success: true, intent: "resendInvitation", message: "Invitación reenviada" });
+    } catch (error) {
+      console.error("Error resending invitation:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error al reenviar invitación";
+      return json({ success: false, intent: "resendInvitation", error: errorMessage }, { status: 500 });
     }
   }
 
@@ -165,7 +195,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const userId = formData.get("userId") as string;
 
     if (!userId) {
-      return json({ success: false, error: "ID de usuario requerido" }, { status: 400 });
+      return json({ success: false, intent: "updatePermissions", error: "ID de usuario requerido" }, { status: 400 });
     }
 
     const permissions: string[] = [];
@@ -193,11 +223,11 @@ export async function action({ request }: ActionFunctionArgs) {
         session.accessToken
       );
 
-      return json({ success: true, message: "Permisos actualizados exitosamente" });
+      return json({ success: true, intent: "updatePermissions", message: "Permisos actualizados exitosamente" });
     } catch (error) {
       console.error("Error updating permissions:", error);
       const errorMessage = error instanceof Error ? error.message : "Error al actualizar permisos";
-      return json({ success: false, error: errorMessage }, { status: 500 });
+      return json({ success: false, intent: "updatePermissions", error: errorMessage }, { status: 500 });
     }
   }
 
@@ -205,7 +235,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const userId = formData.get("userId") as string;
 
     if (!userId) {
-      return json({ success: false, error: "ID de usuario requerido" }, { status: 400 });
+      return json({ success: false, intent: "delete", error: "ID de usuario requerido" }, { status: 400 });
     }
 
     try {
@@ -222,15 +252,15 @@ export async function action({ request }: ActionFunctionArgs) {
         session.accessToken
       );
 
-      return json({ success: true, message: "Usuario eliminado exitosamente" });
+      return json({ success: true, intent: "delete", message: "Usuario eliminado exitosamente" });
     } catch (error) {
       console.error("Error deleting user:", error);
       const errorMessage = error instanceof Error ? error.message : "Error al eliminar usuario";
-      return json({ success: false, error: errorMessage }, { status: 500 });
+      return json({ success: false, intent: "delete", error: errorMessage }, { status: 500 });
     }
   }
 
-  return json({ success: false, error: "Acción no válida" }, { status: 400 });
+  return json({ success: false, intent: null, error: "Acción no válida" }, { status: 400 });
 }
 
 // ---------- role badge ----------
@@ -362,7 +392,21 @@ export default function Users() {
   const fetcher = useFetcher();
 
   const isSubmitting = fetcher.state === "submitting";
-  const actionData = fetcher.data as { success?: boolean; error?: string; message?: string } | undefined;
+  const actionData = fetcher.data as
+    | {
+        success?: boolean;
+        error?: string;
+        message?: string;
+        intent?: "create" | "resendInvitation" | "updatePermissions" | "delete" | null;
+      }
+    | undefined;
+
+  // Flash banner: shows the most recent action result (success or error) at
+  // the top of the page and auto-dismisses. The fetcher.data reference also
+  // changes when the same action runs again, so a fresh flash always renders.
+  const [flash, setFlash] = useState<
+    { kind: "success" | "error"; text: string } | null
+  >(null);
 
   useEffect(() => {
     if (fetcher.state === "idle" && actionData?.success) {
@@ -375,6 +419,21 @@ export default function Users() {
       setDeletingUser(null);
     }
   }, [fetcher.state]);
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !actionData) return;
+    if (actionData.success && actionData.message) {
+      setFlash({ kind: "success", text: actionData.message });
+    } else if (actionData.error) {
+      setFlash({ kind: "error", text: actionData.error });
+    }
+  }, [fetcher.state, actionData]);
+
+  useEffect(() => {
+    if (!flash) return;
+    const id = setTimeout(() => setFlash(null), 4000);
+    return () => clearTimeout(id);
+  }, [flash]);
 
   const handleEditUser = (user: User) => {
     setEditingUser(user);
@@ -433,6 +492,45 @@ export default function Users() {
     <AuthLayout>
       <div className="h-[calc(100vh-8rem)] flex flex-col gap-4">
 
+        {/* Flash banner — surfaces success/error feedback for any action */}
+        {flash && (
+          <Alert
+            className={cn(
+              "flex items-center gap-2",
+              flash.kind === "success"
+                ? "bg-moss-soft border-moss/20"
+                : "bg-wine-soft border-wine/20",
+            )}
+          >
+            <Icon
+              name={flash.kind === "success" ? "check" : "warn"}
+              size={14}
+              className={
+                flash.kind === "success" ? "text-moss-deep" : "text-wine"
+              }
+            />
+            <AlertDescription
+              className={cn(
+                "text-[12px] flex-1",
+                flash.kind === "success" ? "text-moss-deep" : "text-wine",
+              )}
+            >
+              {flash.text}
+            </AlertDescription>
+            <button
+              type="button"
+              aria-label="Cerrar"
+              onClick={() => setFlash(null)}
+              className={cn(
+                "shrink-0 text-[11px] uppercase tracking-wider font-mono px-2 py-1 rounded hover:bg-paper-3",
+                flash.kind === "success" ? "text-moss-deep" : "text-wine",
+              )}
+            >
+              Cerrar
+            </button>
+          </Alert>
+        )}
+
         {/* Page header */}
         <header className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -456,7 +554,8 @@ export default function Users() {
               <DialogHeader>
                 <DialogTitle>Crear Nuevo Usuario</DialogTitle>
                 <DialogDescription>
-                  Agrega un nuevo administrador o usuario operativo.
+                  Agrega un nuevo administrador o usuario operativo. Recibirá un
+                  email con instrucciones para crear su contraseña.
                 </DialogDescription>
               </DialogHeader>
               <fetcher.Form method="post">
@@ -506,7 +605,7 @@ export default function Users() {
                   )}
                 </div>
 
-                {actionData?.error && (
+                {actionData?.error && actionData.intent === "create" && (
                   <div className="text-[13px] text-wine bg-wine-soft border border-wine/20 p-3 rounded-lg mb-4">
                     {actionData.error}
                   </div>
@@ -553,7 +652,7 @@ export default function Users() {
                   )}
                 </div>
 
-                {actionData?.error && isEditDialogOpen && (
+                {actionData?.error && actionData.intent === "updatePermissions" && isEditDialogOpen && (
                   <div className="text-[13px] text-wine bg-wine-soft border border-wine/20 p-3 rounded-lg mb-4">
                     {actionData.error}
                   </div>
@@ -591,7 +690,7 @@ export default function Users() {
                   Esta acción eliminará al usuario de esta compañía. El usuario podrá seguir accediendo a otras compañías si pertenece a alguna.
                 </p>
               </div>
-              {actionData?.error && isDeleteDialogOpen && (
+              {actionData?.error && actionData.intent === "delete" && isDeleteDialogOpen && (
                 <div className="text-[13px] text-wine bg-wine-soft border border-wine/20 p-3 rounded-lg mb-4">
                   {actionData.error}
                 </div>
@@ -698,6 +797,22 @@ export default function Users() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
+                        {user.status !== "activo" && user.status !== "active" && (
+                          <fetcher.Form method="post" className="inline">
+                            <input type="hidden" name="intent" value="resendInvitation" />
+                            <input type="hidden" name="userId" value={user.id} />
+                            <Button
+                              type="submit"
+                              variant="ghost"
+                              size="sm"
+                              title="Reenviar invitación"
+                              className="hover:text-clay-deep hover:bg-clay-soft"
+                              disabled={isSubmitting}
+                            >
+                              <Mail className="h-4 w-4" />
+                            </Button>
+                          </fetcher.Form>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"

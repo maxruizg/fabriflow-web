@@ -41,9 +41,11 @@ export async function apiRequest<T>(
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}${endpoint}`;
 
-  const defaultHeaders: HeadersInit = {
-    'Content-Type': 'application/json',
-  };
+  // Para cuerpos `FormData` NO seteamos Content-Type — el runtime de fetch
+  // genera el header correcto con el boundary del multipart. Si forzamos
+  // `application/json` aquí, actix-multipart rechaza con `ContentTypeIncompatible`.
+  const isMultipart = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const defaultHeaders: HeadersInit = isMultipart ? {} : { 'Content-Type': 'application/json' };
 
   if (token) {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
@@ -351,17 +353,8 @@ import type {
   PurchaseOrderUploadResponse,
 } from '~/types';
 
-/**
- * The list endpoint returns SurrealDB record ids in the form `"invoice:abc123"`,
- * but path-based endpoints (`GET /api/invoices/{id}`) expect the bare identifier.
- * Strip the `"invoice:"` prefix and any SurrealDB angle-bracket escapes.
- */
-function bareInvoiceId(id: string): string {
-  const trimmed = id.startsWith('invoice:') ? id.slice('invoice:'.length) : id;
-  const stripped = trimmed.replace(/[⟨⟩\\]/g, '');
-  console.log(`[bareInvoiceId] in="${id}" → out="${stripped}"`);
-  return stripped;
-}
+// IDs come back from the backend as bare UUIDs (Postgres). No prefix stripping
+// is needed — pass them through to path-based endpoints unchanged.
 
 /**
  * Fetch invoices with filters and cursor-based pagination
@@ -442,7 +435,7 @@ export async function fetchInvoice(
   invoiceId: string
 ): Promise<InvoiceBackend> {
   return apiRequest<InvoiceBackend>(
-    `/api/invoices/${encodeURIComponent(bareInvoiceId(invoiceId))}`,
+    `/api/invoices/${encodeURIComponent(invoiceId)}`,
     {
       method: 'GET',
       headers: {
@@ -484,7 +477,7 @@ export async function updateInvoiceStatus(
   estado: InvoiceStatus
 ): Promise<InvoiceBackend> {
   return apiRequest<InvoiceBackend>(
-    `/api/invoices/${encodeURIComponent(bareInvoiceId(invoiceId))}/status`,
+    `/api/invoices/${encodeURIComponent(invoiceId)}/status`,
     {
       method: 'PUT',
       headers: {
@@ -505,7 +498,7 @@ export async function deleteInvoice(
   invoiceId: string
 ): Promise<{ message: string; invoiceId: string }> {
   return apiRequest<{ message: string; invoiceId: string }>(
-    `/api/invoices/${encodeURIComponent(bareInvoiceId(invoiceId))}/delete`,
+    `/api/invoices/${encodeURIComponent(invoiceId)}/delete`,
     {
       method: 'POST',
       headers: {
@@ -535,8 +528,7 @@ export async function fetchInvoiceNeighbors(
 
   const collected: { id: string }[] = [];
   let cursor: string | undefined = filters.cursor;
-  const targetBare = bareInvoiceId(invoiceId);
-  const matches = (inv: { id: string }) => bareInvoiceId(inv.id) === targetBare;
+  const matches = (inv: { id: string }) => inv.id === invoiceId;
 
   for (let page = 0; page < maxPages; page++) {
     const response = await list(token, companyId, { ...filters, cursor, limit: pageSize });
@@ -572,7 +564,7 @@ export async function fetchInvoiceUrls(
   invoiceId: string
 ): Promise<InvoiceUrlsResponse> {
   return apiRequest<InvoiceUrlsResponse>(
-    `/api/invoices/${encodeURIComponent(bareInvoiceId(invoiceId))}/urls`,
+    `/api/invoices/${encodeURIComponent(invoiceId)}/urls`,
     {
       method: 'GET',
       headers: {
@@ -727,6 +719,7 @@ export interface InvoiceUploadResponse {
     unmatchedInvoiceLines: number;
     unmatchedOrderLines: number;
   };
+  mismatchSummary?: string;
 }
 
 // ============================================================================
@@ -778,5 +771,82 @@ export async function rejectVendor(
       body: JSON.stringify({ reason }),
     },
     token
+  );
+}
+
+// ============================================
+// Vendor invitations
+// ============================================
+
+export interface SendVendorInviteResponse {
+  id: string;
+  shareLink: string;
+  expiresAt: string;
+}
+
+export async function sendVendorInvite(
+  email: string,
+  token: string,
+  companyId: string
+): Promise<SendVendorInviteResponse> {
+  return apiRequest<SendVendorInviteResponse>(
+    '/api/vendors/invite',
+    {
+      method: 'POST',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+      body: JSON.stringify({ email }),
+    },
+    token
+  );
+}
+
+export interface PublicVendorInviteResponse {
+  company: {
+    id: string;
+    name: string;
+    logoUrl: string | null;
+  };
+  vendorEmailHint: string;
+  expiresAt: string;
+}
+
+export async function fetchPublicVendorInvite(
+  inviteToken: string
+): Promise<PublicVendorInviteResponse> {
+  return apiRequest<PublicVendorInviteResponse>(
+    `/api/public/vendor-invite/${encodeURIComponent(inviteToken)}`,
+    { method: 'GET' }
+  );
+}
+
+export interface AcceptVendorInvitePayload {
+  email: string;
+  password: string;
+  name: string;
+  vendorRfc: string;
+  vendorCompanyType: 'legal' | 'personal';
+  vendorLegalName: string;
+  contactLastname?: string;
+  phone?: string;
+}
+
+export interface AcceptVendorInviteResponse {
+  success: boolean;
+  message: string;
+  userId: string;
+}
+
+export async function acceptVendorInvite(
+  inviteToken: string,
+  payload: AcceptVendorInvitePayload
+): Promise<AcceptVendorInviteResponse> {
+  return apiRequest<AcceptVendorInviteResponse>(
+    `/api/public/vendor-invite/${encodeURIComponent(inviteToken)}/accept`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }
   );
 }

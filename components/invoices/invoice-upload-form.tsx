@@ -33,6 +33,8 @@ export interface InvoiceUploadActionData {
     filesUploaded: boolean;
   };
   matchReport?: MatchReportShape;
+  /** Resumen humano (Claude) de las discrepancias del match. Opcional. */
+  mismatchSummary?: string;
 }
 
 export interface MatchReportShape {
@@ -72,7 +74,12 @@ export function InvoiceUploadForm({ className, orderId, availableOrders }: Invoi
   // File states
   const [pdfFactura, setPdfFactura] = React.useState<File | null>(null);
   const [xmlFactura, setXmlFactura] = React.useState<File | null>(null);
-  const [selectedOrderId, setSelectedOrderId] = React.useState<string>("");
+  // Si llegamos con ?orderId=... desde la OC, autoseleccionamos la orden — siempre que
+  // siga estando entre las disponibles para facturar.
+  const [selectedOrderId, setSelectedOrderId] = React.useState<string>(() => {
+    if (orderId && availableOrders.some((o) => o.id === orderId)) return orderId;
+    return "";
+  });
 
   // File errors (client-side validation)
   const [pdfFacturaError, setPdfFacturaError] = React.useState<string>("");
@@ -202,6 +209,9 @@ export function InvoiceUploadForm({ className, orderId, availableOrders }: Invoi
       <Form method="post" encType="multipart/form-data" onSubmit={handleSubmit}>
         <input type="hidden" name="intent" value="uploadComplete" />
         <input type="hidden" name="purchaseOrderId" value={selectedOrderId} />
+        {actionData?.mismatchSummary ? (
+          <MismatchSummaryNotice text={actionData.mismatchSummary} />
+        ) : null}
         {actionData?.matchReport ? <MatchReportPanel report={actionData.matchReport} /> : null}
 
         {/* Purchase Order Selector */}
@@ -376,6 +386,17 @@ export function InvoiceUploadForm({ className, orderId, availableOrders }: Invoi
       {actionData?.success && actionData.invoice && !isSubmitting && (
         <InvoiceDataPreview invoice={actionData.invoice} />
       )}
+    </div>
+  );
+}
+
+function MismatchSummaryNotice({ text }: { text: string }) {
+  return (
+    <div className="mb-3 rounded-md border border-clay bg-clay-soft px-4 py-3">
+      <div className="flex items-start gap-2 text-[13px] text-ink-2">
+        <Icon name="warn" size={14} className="mt-0.5 text-clay-deep" />
+        <p className="leading-snug">{text}</p>
+      </div>
     </div>
   );
 }

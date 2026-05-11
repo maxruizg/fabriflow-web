@@ -26,6 +26,11 @@ export interface FileDropZoneProps {
   error?: string;
   /** Whether the component is disabled */
   disabled?: boolean;
+  /**
+   * How to render the selected file. Defaults to the generic file row.
+   * Use `"image"` for an inline thumbnail (PNG / JPEG logos).
+   */
+  previewKind?: "file" | "image";
 }
 
 /**
@@ -44,9 +49,25 @@ export function FileDropZone({
   onFileSelect,
   error,
   disabled = false,
+  previewKind = "file",
 }: FileDropZoneProps) {
   const [isDragging, setIsDragging] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
+
+  // Object URL for image previews — revoked when the file changes or the
+  // component unmounts to avoid leaking blobs in memory.
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (previewKind !== "image" || !file) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [file, previewKind]);
 
   // Format file size for display
   const formatFileSize = (bytes: number): string => {
@@ -172,7 +193,7 @@ export function FileDropZone({
             )}
           />
         ) : (
-          /* File preview */
+          /* File preview — generic row or inline image thumbnail */
           <div
             className={cn(
               "ff-dropzone flex items-center justify-between gap-3 p-4",
@@ -183,7 +204,17 @@ export function FileDropZone({
             )}
           >
             <div className="flex items-center gap-3 flex-1 min-w-0">
-              <Icon name="file" size={20} className="text-ink-3 flex-shrink-0" />
+              {previewKind === "image" && previewUrl ? (
+                <span className="flex-shrink-0 grid h-14 w-14 place-items-center rounded-md border border-line bg-paper">
+                  <img
+                    src={previewUrl}
+                    alt={`Vista previa de ${file.name}`}
+                    className="max-h-12 max-w-12 object-contain"
+                  />
+                </span>
+              ) : (
+                <Icon name="file" size={20} className="text-ink-3 flex-shrink-0" />
+              )}
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-ink truncate">
                   {file.name}

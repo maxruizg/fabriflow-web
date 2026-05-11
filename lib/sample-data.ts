@@ -10,6 +10,11 @@
  */
 
 import type { DocType } from "~/components/ui/doc-chip";
+import type {
+  InvoiceBalance,
+  OrderDocState,
+  OrderEvent,
+} from "./procurement-api.server";
 
 export interface SampleVendor {
   id: string;
@@ -39,6 +44,14 @@ export interface SampleOrder {
   status: string;
   items: number;
   docs: DocType[];
+  /** Real backend history; absent for legacy mock fixtures. */
+  history?: OrderEvent[];
+  /** Real backend doc URLs; absent for legacy mock fixtures. */
+  docState?: OrderDocState;
+  /** Backend folio for display; falls back to `id` when absent. */
+  folio?: string;
+  /** Saldo de la factura vinculada (Pagado/Falta), si está disponible. */
+  invoiceBalance?: InvoiceBalance | null;
 }
 
 export interface SamplePayment {
@@ -102,24 +115,41 @@ export const SAMPLE_AGING: SampleAgingBucket[] = [
   { bucket: "+90 días", days: "90+", amount: 24500, share: 3 },
 ];
 
-/** Format YYYY-MM-DD as "DD MMM YYYY" in Spanish abbreviations. */
-export function fmtDate(iso: string): string {
-  const [y, m, d] = iso.split("-");
-  const months = [
-    "ene",
-    "feb",
-    "mar",
-    "abr",
-    "may",
-    "jun",
-    "jul",
-    "ago",
-    "sep",
-    "oct",
-    "nov",
-    "dic",
-  ];
-  return `${d} ${months[parseInt(m, 10) - 1]} ${y}`;
+const MONTHS_ES = [
+  "ene",
+  "feb",
+  "mar",
+  "abr",
+  "may",
+  "jun",
+  "jul",
+  "ago",
+  "sep",
+  "oct",
+  "nov",
+  "dic",
+];
+
+/** Format YYYY-MM-DD (or an ISO timestamp) as "DD MMM YYYY" in Spanish. */
+export function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const datePart = iso.slice(0, 10);
+  const [y, m, d] = datePart.split("-");
+  const month = MONTHS_ES[parseInt(m, 10) - 1];
+  if (!y || !m || !d || !month) return "—";
+  return `${d} ${month} ${y}`;
+}
+
+/** Format an ISO timestamp as "DD MMM · HH:MM" — used for short event lines. */
+export function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  const d = String(date.getDate()).padStart(2, "0");
+  const month = MONTHS_ES[date.getMonth()] ?? "—";
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${d} ${month} · ${hh}:${mm}`;
 }
 
 export function fmtCurrency(n: number, cur: "MXN" | "USD" | "EUR" = "MXN"): { symbol: string; integer: string; decimal: string; code: string } {
@@ -135,6 +165,9 @@ export function fmtCurrency(n: number, cur: "MXN" | "USD" | "EUR" = "MXN"): { sy
 
 /** Status → tone mirror of design's STATUS_TONE. */
 export const STATUS_TONE: Record<string, "moss" | "clay" | "rust" | "wine" | "ink"> = {
+  Creada: "rust",
+  Autorizada: "moss",
+  Facturada: "clay",
   Recibido: "moss",
   "En tránsito": "clay",
   Confirmado: "moss",

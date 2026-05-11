@@ -166,5 +166,99 @@ export const loginSchema = z.object({
     .min(1, "La contraseña es requerida"),
 });
 
+// Vendor invite acceptance — buyer pre-locked the company via the invitation
+// token, so no `companyType` / `company` fields. Same provider data shape as
+// the provider branch of registerSchema.
+const baseVendorInviteSchema = z.object({
+  providerType: z.enum(["legal", "personal"], {
+    errorMap: () => ({ message: "Por favor selecciona si eres empresa o persona física" }),
+  }),
+
+  providerCompany: z
+    .string()
+    .min(3, "El nombre debe tener al menos 3 caracteres")
+    .max(100, "El nombre no puede exceder 100 caracteres"),
+
+  vendorLegalName: z
+    .string()
+    .optional()
+    .refine((val) => !val || val.length >= 3, {
+      message: "La razón social debe tener al menos 3 caracteres",
+    })
+    .refine((val) => !val || val.length <= 100, {
+      message: "La razón social no puede exceder 100 caracteres",
+    }),
+
+  rfc: z
+    .string()
+    .min(12, "El RFC debe tener al menos 12 caracteres")
+    .max(13, "El RFC no puede exceder 13 caracteres")
+    .regex(rfcRegex, "Formato de RFC inválido (ej: ABC123456XYZ)"),
+
+  phone: z
+    .string()
+    .min(10, "El teléfono debe tener al menos 10 dígitos")
+    .regex(phoneRegex, "Formato de teléfono inválido"),
+
+  name: z
+    .string()
+    .transform((val) => val?.trim() || undefined)
+    .optional(),
+
+  lastname: z
+    .string()
+    .transform((val) => val?.trim() || undefined)
+    .optional(),
+
+  email: z
+    .string()
+    .email("Correo electrónico inválido")
+    .max(100, "El correo no puede exceder 100 caracteres"),
+
+  password: z
+    .string()
+    .min(8, "La contraseña debe tener al menos 8 caracteres")
+    .max(100, "La contraseña no puede exceder 100 caracteres"),
+
+  confirmPassword: z
+    .string()
+    .min(8, "La contraseña debe tener al menos 8 caracteres"),
+});
+
+export const vendorInviteSchema = baseVendorInviteSchema
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Las contraseñas no coinciden",
+    path: ["confirmPassword"],
+  })
+  .refine(
+    (data) => {
+      if (data.providerType === "legal") {
+        return data.vendorLegalName && data.vendorLegalName.length >= 3;
+      }
+      return true;
+    },
+    { message: "La razón social es requerida para empresas", path: ["vendorLegalName"] },
+  )
+  .refine(
+    (data) => {
+      if (data.providerType === "legal") {
+        return data.name && data.name.length >= 2;
+      }
+      return true;
+    },
+    { message: "El nombre del contacto es requerido", path: ["name"] },
+  )
+  .refine(
+    (data) => {
+      if (data.providerType === "legal") {
+        return data.lastname && data.lastname.length >= 2;
+      }
+      return true;
+    },
+    { message: "El apellido del contacto es requerido", path: ["lastname"] },
+  );
+
+export type VendorInviteFormData = z.infer<typeof baseVendorInviteSchema>;
+
 export type RegisterFormData = z.infer<typeof baseRegisterSchema>;
 export type LoginFormData = z.infer<typeof loginSchema>;

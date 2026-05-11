@@ -164,9 +164,12 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 function inferDocs(inv: InvoiceBackend): DocType[] {
+  // El payload de listado trae `*Key` (los object keys del bucket) pero no las
+  // URLs firmadas — éstas se piden bajo demanda vía /api/invoices/{id}/urls.
+  // Caemos a `*Url` por compatibilidad si en algún flujo se usa el shape antiguo.
   const docs: DocType[] = [];
-  if (inv.ordenCompraUrl) docs.push("OC");
-  if (inv.xmlUrl || inv.pdfUrl) docs.push("FAC");
+  if (inv.ordenCompraKey || inv.ordenCompraUrl) docs.push("OC");
+  if (inv.pdfKey || inv.xmlKey || inv.pdfUrl || inv.xmlUrl) docs.push("FAC");
   return docs;
 }
 

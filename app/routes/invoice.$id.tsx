@@ -65,6 +65,11 @@ import {
   fetchInvoiceUrls,
   fetchInvoiceNeighbors,
 } from "~/lib/api.server";
+import {
+  fetchInvoiceBalance,
+  type InvoiceBalance,
+} from "~/lib/procurement-api.server";
+import { fmtCurrency } from "~/lib/sample-data";
 import type { InvoiceBackend, InvoiceStatus } from "~/types";
 import { statusTone, statusLabel, cn } from "~/lib/utils";
 
@@ -163,6 +168,16 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     return null;
   });
 
+  // Saldo: total / pagado / falta. No bloquea el render si falla.
+  const invoiceBalance = await fetchInvoiceBalance(
+    session.accessToken,
+    user.company,
+    invoiceId,
+  ).catch((error) => {
+    console.warn("[invoice.$id] fetchInvoiceBalance failed:", error);
+    return null as InvoiceBalance | null;
+  });
+
   // Off the critical path: neighbor lookup walks the paginated list and can
   // take several round-trips. Defer it so the page renders immediately and
   // the prev/next buttons stream in once resolved.
@@ -184,6 +199,7 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
       xmlUrl: urlsResult?.xmlUrl ?? invoice.xmlUrl,
       ordenCompraUrl: urlsResult?.ordenCompraUrl ?? invoice.ordenCompraUrl,
     },
+    invoiceBalance,
     isAdmin,
     neighbors: neighborsPromise,
     error: null,
@@ -283,6 +299,88 @@ function MetaItem({
   );
 }
 
+function InvoiceBalanceCard({ balance }: { balance: InvoiceBalance }) {
+  const cur: "MXN" | "USD" | "EUR" =
+    balance.currency === "MXN" ||
+    balance.currency === "USD" ||
+    balance.currency === "EUR"
+      ? (balance.currency as "MXN" | "USD" | "EUR")
+      : "MXN";
+  const fmt = (n: number) => {
+    const m = fmtCurrency(n, cur);
+    return { display: `${m.symbol}${m.integer}.${m.decimal}`, code: m.code };
+  };
+  const total = fmt(balance.total);
+  const paid = fmt(balance.paid);
+  const outstanding = fmt(balance.outstanding);
+  const fullyPaid = balance.outstanding <= 0.01;
+  const progress =
+    balance.total > 0
+      ? Math.min(100, Math.max(0, (balance.paid / balance.total) * 100))
+      : 0;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-[11px] font-mono uppercase tracking-wider text-ink-3 font-normal flex items-center justify-between">
+          <span>Saldo</span>
+          {fullyPaid ? (
+            <Badge tone="moss" className="text-[10px]">
+              Pagado
+            </Badge>
+          ) : null}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
+              Total
+            </p>
+            <p className="font-mono text-[14px] text-ink mt-0.5">
+              {total.display}
+              <span className="ml-1 text-[10.5px] text-ink-3">{total.code}</span>
+            </p>
+          </div>
+          <div>
+            <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
+              Pagado
+            </p>
+            <p className="font-mono text-[14px] text-ink mt-0.5">
+              {paid.display}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
+              Falta
+            </p>
+            <p
+              className={cn(
+                "font-mono text-[14px] mt-0.5",
+                fullyPaid ? "text-ink-3" : "text-ink",
+              )}
+            >
+              {outstanding.display}
+            </p>
+          </div>
+        </div>
+        <div
+          className="h-1.5 w-full rounded bg-ink-5 overflow-hidden"
+          aria-label={`Progreso de pago ${progress.toFixed(0)}%`}
+        >
+          <div
+            className={cn(
+              "h-full transition-all",
+              fullyPaid ? "bg-moss" : "bg-clay",
+            )}
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function buildDocuments(invoice: InvoiceBackend): DocumentItem[] {
   const docs: DocumentItem[] = [];
   if (invoice.pdfUrl) {
@@ -345,7 +443,8 @@ function NeighborSync({
 }
 
 export default function InvoiceDetails() {
-  const { invoice, isAdmin, neighbors } = useLoaderData<typeof loader>();
+  const { invoice, invoiceBalance, isAdmin, neighbors } =
+    useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const submit = useSubmit();
   const revalidator = useRevalidator();
@@ -636,6 +735,11 @@ export default function InvoiceDetails() {
                     </p>
                   ) : null}
                 </div>
+
+                {/* Saldo: total / pagado / falta */}
+                {invoiceBalance ? (
+                  <InvoiceBalanceCard balance={invoiceBalance} />
+                ) : null}
 
                 {/* Parties */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
