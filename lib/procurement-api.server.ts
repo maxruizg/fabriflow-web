@@ -465,10 +465,11 @@ export function sendOrder(
   );
 }
 
-/** Saldo de una factura: total facturado, ya pagado y lo que falta por cobrar. */
+/** Saldo de una factura: total facturado, ya pagado, acreditado y lo que falta por cobrar. */
 export interface InvoiceBalance {
   total: number;
   paid: number;
+  credited: number;
   outstanding: number;
   currency: string;
 }

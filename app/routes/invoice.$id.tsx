@@ -5,6 +5,8 @@ import type {
 } from "@remix-run/cloudflare";
 import {
   Await,
+  Form,
+  Link,
   useLoaderData,
   useNavigate,
   useSubmit,
@@ -69,6 +71,8 @@ import {
   fetchInvoiceBalance,
   type InvoiceBalance,
 } from "~/lib/procurement-api.server";
+import { listCreditNotesForInvoice } from "~/lib/credit-notes-api.server";
+import type { CreditNote } from "~/types";
 import { fmtCurrency } from "~/lib/sample-data";
 import type { InvoiceBackend, InvoiceStatus } from "~/types";
 import { statusTone, statusLabel, cn } from "~/lib/utils";
@@ -168,7 +172,7 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     return null;
   });
 
-  // Saldo: total / pagado / falta. No bloquea el render si falla.
+  // Saldo: total / pagado / acreditado / falta. No bloquea el render si falla.
   const invoiceBalance = await fetchInvoiceBalance(
     session.accessToken,
     user.company,
@@ -176,6 +180,16 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
   ).catch((error) => {
     console.warn("[invoice.$id] fetchInvoiceBalance failed:", error);
     return null as InvoiceBalance | null;
+  });
+
+  // Notas de crédito vinculadas a esta factura.
+  const creditNotes = await listCreditNotesForInvoice(
+    session.accessToken,
+    user.company,
+    invoiceId,
+  ).catch((error) => {
+    console.warn("[invoice.$id] listCreditNotesForInvoice failed:", error);
+    return [] as CreditNote[];
   });
 
   // Off the critical path: neighbor lookup walks the paginated list and can
@@ -200,7 +214,9 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
       ordenCompraUrl: urlsResult?.ordenCompraUrl ?? invoice.ordenCompraUrl,
     },
     invoiceBalance,
+    creditNotes,
     isAdmin,
+    userPermissions: user.permissions ?? [],
     neighbors: neighborsPromise,
     error: null,
   });
@@ -312,6 +328,7 @@ function InvoiceBalanceCard({ balance }: { balance: InvoiceBalance }) {
   };
   const total = fmt(balance.total);
   const paid = fmt(balance.paid);
+  const credited = fmt(balance.credited ?? 0);
   const outstanding = fmt(balance.outstanding);
   const fullyPaid = balance.outstanding <= 0.01;
   const progress =
@@ -332,7 +349,7 @@ function InvoiceBalanceCard({ balance }: { balance: InvoiceBalance }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div>
             <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
               Total
@@ -348,6 +365,14 @@ function InvoiceBalanceCard({ balance }: { balance: InvoiceBalance }) {
             </p>
             <p className="font-mono text-[14px] text-ink mt-0.5">
               {paid.display}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
+              Acreditado
+            </p>
+            <p className="font-mono text-[14px] text-ink mt-0.5">
+              {credited.display}
             </p>
           </div>
           <div>
@@ -443,7 +468,7 @@ function NeighborSync({
 }
 
 export default function InvoiceDetails() {
-  const { invoice, invoiceBalance, isAdmin, neighbors } =
+  const { invoice, invoiceBalance, creditNotes, isAdmin, userPermissions, neighbors } =
     useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const submit = useSubmit();
@@ -467,6 +492,13 @@ export default function InvoiceDetails() {
   const label = statusLabel(invoice.estado);
   const total = fmtMoney(invoice.total);
   const subtotal = fmtMoney(invoice.subtotal);
+
+  const canUploadNc =
+    userPermissions.includes("credit_notes:upload") ||
+    userPermissions.includes("*");
+  const canManageNc =
+    userPermissions.includes("credit_notes:approve") ||
+    userPermissions.includes("*");
 
   const filterParamsString = useMemo(() => {
     const params = new URLSearchParams();
@@ -736,10 +768,74 @@ export default function InvoiceDetails() {
                   ) : null}
                 </div>
 
-                {/* Saldo: total / pagado / falta */}
+                {/* Saldo: total / pagado / acreditado / falta */}
                 {invoiceBalance ? (
                   <InvoiceBalanceCard balance={invoiceBalance} />
                 ) : null}
+
+                {/* Notas de crédito relacionadas */}
+                <Card className="p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
+                      Notas de crédito relacionadas
+                    </h3>
+                    {canUploadNc && (
+                      <Link to={`/invoice/${invoice.id}/upload-doc?kind=nc`}>
+                        <Button size="sm" variant="outline">
+                          Subir nota de crédito
+                        </Button>
+                      </Link>
+                    )}
+                  </div>
+                  {creditNotes.length === 0 ? (
+                    <p className="text-[12px] text-ink-3">
+                      Sin notas de crédito.
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-line">
+                      {creditNotes.map((cn) => (
+                        <li
+                          key={cn.id}
+                          className="py-2 flex items-center justify-between text-[13px]"
+                        >
+                          <div>
+                            <div className="font-medium text-ink">
+                              {cn.folio}
+                            </div>
+                            <div className="text-[11px] text-ink-3">
+                              {cn.fechaEmision} ·{" "}
+                              <span className="font-mono">
+                                ${cn.total.toFixed(2)}{" "}
+                                {cn.moneda}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {canManageNc && (
+                              <Form
+                                method="post"
+                                action={`/api/credit-notes/${cn.id}`}
+                              >
+                                <input
+                                  type="hidden"
+                                  name="_intent"
+                                  value="delete"
+                                />
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  type="submit"
+                                >
+                                  Revertir
+                                </Button>
+                              </Form>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Card>
 
                 {/* Parties */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

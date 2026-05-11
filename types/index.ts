@@ -458,19 +458,6 @@ export interface CreditNote {
   xmlKey: string | null;
 }
 
-/**
- * Invoice balance including credited amounts (credit-notes flow).
- * Note: a simpler `InvoiceBalance` (without `credited`) lives in
- * `procurement-api.server.ts` for the payments/orders flow.
- */
-export interface InvoiceBalanceWithCredit {
-  total: number;
-  paid: number;
-  credited: number;
-  outstanding: number;
-  currency: string;
-}
-
 export type UploadStepStatus = "completed" | "error";
 export interface UploadStep {
   label: string;
@@ -490,5 +477,5 @@ export interface UploadActionResult<TPayload = unknown> {
 
 export interface CreditNoteUploadPayload {
   creditNote: CreditNote;
-  balance: InvoiceBalanceWithCredit;
+  balance: import("~/lib/procurement-api.server").InvoiceBalance;
 }
