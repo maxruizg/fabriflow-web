@@ -23,7 +23,8 @@ export type OrderStatusBackend =
   | "cerrado"
   | "incidencia"
   | "pendiente_conf"
-  | "rechazado";
+  | "rechazado"
+  | "pagada";          // Pagada en su totalidad (saldo de factura = 0)
 
 export interface OrderDocState {
   ocUrl: string | null;
@@ -520,6 +521,29 @@ export async function uploadPaymentReceipt(
         "X-Company-Id": companyId,
       },
       body: fd,
+    },
+    token,
+  );
+}
+
+/**
+ * Borra un documento adjunto a una OC (oc/rem/nc/fac/pago) y cascadea la
+ * limpieza apropiada en el backend (bucket, DB rows, balance, status).
+ */
+export async function deleteOrderDoc(
+  token: string,
+  companyId: string,
+  orderId: string,
+  kind: "oc" | "rem" | "nc" | "fac" | "pago",
+): Promise<{ order: OrderBackend; balance: InvoiceBalance | null }> {
+  return apiRequest<{ order: OrderBackend; balance: InvoiceBalance | null }>(
+    `/api/orders/${encodeURIComponent(orderId)}/docs/${kind}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+      },
     },
     token,
   );

@@ -52,6 +52,14 @@ export interface SampleOrder {
   folio?: string;
   /** Saldo de la factura vinculada (Pagado/Falta), si está disponible. */
   invoiceBalance?: InvoiceBalance | null;
+  /** CFDI MetodoPago: "PUE" o "PPD". Gobierna si se requiere REP. */
+  paymentMethod?: string | null;
+  /** Count of Complementos de Pago (CFDI tipo P / REP) attached to the linked invoice. */
+  paymentComplementsCount?: number;
+  /** Folio o UUID del primer REP, para nombre de archivo en la fila. */
+  paymentComplementFirstFolio?: string | null;
+  /** ID del REP más reciente — usado para el delete inline desde el panel. */
+  paymentComplementFirstId?: string | null;
 }
 
 export interface SamplePayment {
@@ -176,6 +184,7 @@ export const STATUS_TONE: Record<string, "moss" | "clay" | "rust" | "wine" | "in
   Incidencia: "wine",
   "Pendiente conf.": "rust",
   Rechazado: "wine",
+  Pagada: "moss",
   Activo: "moss",
   "En revisión": "rust",
   Atrasado: "wine",

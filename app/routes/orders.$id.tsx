@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from "@remix-run/cloudflare";
 import { json, redirect } from "@remix-run/cloudflare";
-import { Form, Link, useLoaderData, useNavigation, useSearchParams } from "@remix-run/react";
+import { Form, Link, useFetcher, useLoaderData, useNavigation, useSearchParams } from "@remix-run/react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 
 import { getFullSession, requireUser } from "~/lib/session.server";
@@ -16,9 +16,11 @@ import {
   type InvoiceBalance,
   type OrderBackend,
 } from "~/lib/procurement-api.server";
+import { listPaymentComplementsForInvoice } from "~/lib/payment-complements-api.server";
+import type { PaymentComplementCfdi } from "~/types";
 
 import { AuthLayout } from "~/components/layout/auth-layout";
-import { Badge } from "~/components/ui/badge";
+import { Badge, type BadgeTone } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import {
@@ -47,6 +49,7 @@ interface LoaderData {
   order: OrderBackend;
   vendor: ActiveVendorSummary | null;
   invoiceBalance: InvoiceBalance | null;
+  paymentComplements: PaymentComplementCfdi[];
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {
@@ -133,6 +136,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   // "Pagado X / Y · falta Z" en el panel PAGO. Es no-fatal: si falla,
   // la UI cae a su estado neutro de "pendiente".
   let invoiceBalance: InvoiceBalance | null = null;
+  let paymentComplements: PaymentComplementCfdi[] = [];
   const invoiceId = order.docState?.facInvoiceId;
   if (invoiceId) {
     try {
@@ -144,13 +148,29 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     } catch (e) {
       console.warn("[orders/:id] could not fetch invoice balance:", e);
     }
+    // Sólo cargamos REPs para facturas PPD — PUE no los requiere.
+    if (order.paymentMethod === "PPD") {
+      try {
+        const invoiceUuid = invoiceId.startsWith("invoice:")
+          ? invoiceId.slice("invoice:".length)
+          : invoiceId;
+        const page = await listPaymentComplementsForInvoice(
+          session.accessToken,
+          session.user.company,
+          invoiceUuid,
+        );
+        paymentComplements = page.data ?? [];
+      } catch (e) {
+        console.warn("[orders/:id] could not fetch payment complements:", e);
+      }
+    }
   }
 
-  return json<LoaderData>({ order, vendor, invoiceBalance });
+  return json<LoaderData>({ order, vendor, invoiceBalance, paymentComplements });
 }
 
 export default function OrderDetailPage() {
-  const { order, vendor } = useLoaderData<typeof loader>();
+  const { order, vendor, paymentComplements } = useLoaderData<typeof loader>();
   const { user } = useUser();
   const [searchParams, setSearchParams] = useSearchParams();
   const [sendOpen, setSendOpen] = useState(false);
@@ -294,11 +314,18 @@ export default function OrderDetailPage() {
             {/* Subir documento — dropdown con los 4 tipos de doc adjuntos a la OC.
                 Sólo se muestran los kinds que aún faltan; si están los 4, se oculta el botón. */}
             {(() => {
-              const docOptions: { label: string; kind: "oc" | "rem" | "nc" | "pago" }[] = [];
+              const docOptions: { label: string; kind: "oc" | "rem" | "nc" | "pago" | "comppago" }[] = [];
               if (!order.docState.ocUrl) docOptions.push({ label: "OC (PDF)", kind: "oc" });
               if (!order.docState.remUrl) docOptions.push({ label: "Remisión", kind: "rem" });
               if (!order.docState.ncUrl) docOptions.push({ label: "Nota de crédito", kind: "nc" });
               if (!order.docState.paymentReceiptUrl) docOptions.push({ label: "Comprobante de pago", kind: "pago" });
+              // Sólo facturas PPD requieren CFDI Complemento de Pago. PUE nunca lo ve.
+              if (
+                order.paymentMethod === "PPD" &&
+                order.docState.facInvoiceId
+              ) {
+                docOptions.push({ label: "Complemento de Pago (CFDI)", kind: "comppago" });
+              }
               if (docOptions.length === 0) return null;
               return (
                 <DropdownMenu.Root>
@@ -559,7 +586,14 @@ export default function OrderDetailPage() {
               <CardContent className="text-[13px] space-y-2">
                 <DocRow label="OC (PDF)" url={order.docState.ocUrl} />
                 <DocRow label="Remisión" url={order.docState.remUrl} />
-                <DocRow label="Nota crédito" url={order.docState.ncUrl} />
+                <DocRow
+                  label="Nota crédito"
+                  url={order.docState.ncUrl}
+                  uploadHref={`/orders/${orderBareId}/upload-doc?kind=nc`}
+                  statusBadge={
+                    order.docState.ncUrl ? { label: "Cargada", tone: "moss" } : undefined
+                  }
+                />
                 <DocRow
                   label="Comprobante de pago"
                   url={order.docState.paymentReceiptUrl ?? null}
@@ -569,6 +603,35 @@ export default function OrderDetailPage() {
                   url={order.docState.facInvoiceId ? `/invoices/${stripPrefix(order.docState.facInvoiceId, "invoice")}` : null}
                   internal
                 />
+                {order.paymentMethod === "PPD" && order.docState.facInvoiceId ? (
+                  <div className="pt-2 mt-1 border-t border-line">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="text-[12px] font-medium text-ink-2 uppercase tracking-wide">
+                        Complementos de Pago (CFDI)
+                      </div>
+                      {paymentComplements.length > 0 ? (
+                        <span className="text-[11px] font-mono text-ink-3">
+                          {paymentComplements.length}
+                        </span>
+                      ) : null}
+                    </div>
+                    {paymentComplements.length === 0 ? (
+                      <p className="text-[12px] text-ink-3 leading-snug">
+                        Falta Complemento de Pago para esta factura PPD. Sube el XML del CFDI tipo &ldquo;Pago&rdquo; (REP) para registrar el pago ante el SAT.
+                      </p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {paymentComplements.map((pc) => (
+                          <PaymentComplementRow
+                            key={pc.id}
+                            pc={pc}
+                            orderBareId={orderBareId}
+                          />
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
 
@@ -727,16 +790,87 @@ function KV({ k, v }: { k: string; v: string }) {
   );
 }
 
+function PaymentComplementRow({
+  pc,
+  orderBareId,
+}: {
+  pc: PaymentComplementCfdi;
+  orderBareId: string;
+}) {
+  const fetcher = useFetcher<{ ok?: boolean; error?: string }>();
+  const deleting = fetcher.state !== "idle";
+  const onDelete = () => {
+    if (deleting) return;
+    if (!confirm(`¿Eliminar el Complemento de Pago folio ${pc.folio}?`)) return;
+    const fd = new FormData();
+    fd.set("complementId", pc.id);
+    fetcher.submit(fd, {
+      method: "post",
+      action: `/orders/${orderBareId}/delete-doc?kind=comppago`,
+    });
+  };
+  return (
+    <li className="flex items-center justify-between gap-2">
+      <div className="min-w-0 flex-1">
+        <div className="text-[12px] text-ink truncate">
+          <span className="font-mono">{pc.folio}</span>
+          <span className="text-ink-3"> · {pc.fechaTimbrado.slice(0, 10)}</span>
+        </div>
+        <div className="text-[11px] text-ink-3 font-mono truncate">
+          UUID {pc.uuid}
+        </div>
+        {fetcher.data?.error ? (
+          <div className="text-[10.5px] text-wine mt-0.5">{fetcher.data.error}</div>
+        ) : null}
+      </div>
+      {pc.xmlKey ? (
+        <a
+          href={`/api/payment-complements/${pc.id}/document?type=xml`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-clay underline"
+          title="Descargar XML"
+        >
+          XML
+        </a>
+      ) : null}
+      {pc.pdfKey ? (
+        <a
+          href={`/api/payment-complements/${pc.id}/document?type=pdf`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-clay underline"
+          title="Descargar PDF"
+        >
+          PDF
+        </a>
+      ) : null}
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={deleting}
+        className="text-[11px] text-wine-700 hover:text-wine-900 disabled:text-ink-4 disabled:cursor-not-allowed"
+        title="Eliminar Complemento de Pago"
+        aria-label="Eliminar Complemento de Pago"
+      >
+        {deleting ? "…" : "Eliminar"}
+      </button>
+    </li>
+  );
+}
+
 function DocRow({
   label,
   url,
   internal,
   uploadHref,
+  statusBadge,
 }: {
   label: string;
   url: string | null;
   internal?: boolean;
   uploadHref?: string | null;
+  statusBadge?: { label: string; tone: BadgeTone };
 }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border border-line bg-paper-2 px-3 py-2">
@@ -745,20 +879,23 @@ function DocRow({
         <span className="text-[12.5px]">{label}</span>
       </div>
       {url ? (
-        internal ? (
-          <Link to={url} className="text-[12px] text-clay hover:underline">
-            Abrir
-          </Link>
-        ) : (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[12px] text-clay hover:underline"
-          >
-            Descargar
-          </a>
-        )
+        <div className="flex items-center gap-2">
+          {statusBadge ? <Badge tone={statusBadge.tone}>{statusBadge.label}</Badge> : null}
+          {internal ? (
+            <Link to={url} className="text-[12px] text-clay hover:underline">
+              Abrir
+            </Link>
+          ) : (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[12px] text-clay hover:underline"
+            >
+              Descargar
+            </a>
+          )}
+        </div>
       ) : uploadHref ? (
         <Link
           to={uploadHref}
@@ -788,6 +925,7 @@ function StatusBadge({ status }: { status: OrderBackend["status"] }) {
       incidencia: "wine",
       pendiente_conf: "rust",
       rechazado: "wine",
+      pagada: "moss",
     } as const
   )[status];
   const label = (
@@ -803,6 +941,7 @@ function StatusBadge({ status }: { status: OrderBackend["status"] }) {
       incidencia: "Incidencia",
       pendiente_conf: "Pendiente conf.",
       rechazado: "Rechazada",
+      pagada: "Pagada",
     } as const
   )[status];
   return <Badge tone={tone}>{label}</Badge>;

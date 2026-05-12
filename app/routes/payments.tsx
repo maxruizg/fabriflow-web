@@ -8,7 +8,6 @@ import { useUser } from "~/lib/auth-context";
 import { useRole } from "~/lib/role-context";
 import { cn } from "~/lib/utils";
 import {
-  SAMPLE_PAYMENTS,
   fmtCurrency,
   fmtDate,
   STATUS_TONE,
@@ -57,7 +56,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // Backend is ready (`be-v2/src/api/payments.rs`). To swap from sample data
   // see `procurement-api.server.ts#fetchPayments`.
   await requireUser(request);
-  return json({ payments: SAMPLE_PAYMENTS });
+  const payments: SamplePayment[] = [];
+  return json({ payments });
 }
 
 type StatusFilter =
@@ -167,18 +167,6 @@ export default function PaymentsPage() {
                 ? "Confirma pagos recibidos y revisa comprobantes"
                 : `${user?.companyName ?? "Tu empresa"} · ${counts.pending} pagos por confirmar`}
             </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm">
-              <Icon name="upload" size={13} />
-              Subir comprobante
-            </Button>
-            {!isVendor ? (
-              <Button variant="clay" size="sm">
-                <Icon name="plus" size={13} />
-                Registrar pago
-              </Button>
-            ) : null}
           </div>
         </header>
 

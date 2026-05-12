@@ -16,6 +16,7 @@ const KIND_TITLES: Record<DocKind, string> = {
   rem: "Remisión",
   nc: "Nota de crédito",
   pago: "Comprobante de pago",
+  comppago: "Complemento de Pago (CFDI)",
 };
 
 const KIND_SUBTITLES: Record<DocKind, string> = {
@@ -23,6 +24,8 @@ const KIND_SUBTITLES: Record<DocKind, string> = {
   rem: "Adjunta la remisión que recibiste del proveedor.",
   nc: "Sube el XML de la nota de crédito; el sistema vinculará automáticamente la factura referenciada en CfdiRelacionados.",
   pago: "Adjunta el comprobante de pago — PDF, imagen o XML del Complemento de Pagos (REP).",
+  comppago:
+    "Sube el XML del CFDI tipo \"Pago\" (REP). El sistema parsea cada <Pago> y vincula los <DoctoRelacionado> a las facturas PPD afectadas.",
 };
 
 const KIND_INITIAL_STEPS: Record<DocKind, string[]> = {
@@ -43,6 +46,14 @@ const KIND_INITIAL_STEPS: Record<DocKind, string[]> = {
     "Asignando montos a facturas",
     "Guardando pago y recalculando saldo",
   ],
+  comppago: [
+    "Subiendo archivo XML",
+    "Parseando CFDI tipo Pago",
+    "Validando tipo de comprobante (tipo P)",
+    "Resolviendo facturas relacionadas",
+    "Validando montos y consistencia",
+    "Guardando complemento y vinculando facturas",
+  ],
 };
 
 const ACCEPT_BY_KIND: Record<DocKind, { accept: string; hint: string }> = {
@@ -62,6 +73,10 @@ const ACCEPT_BY_KIND: Record<DocKind, { accept: string; hint: string }> = {
   nc: {
     accept: ".xml,application/xml,text/xml",
     hint: "XML del CFDI",
+  },
+  comppago: {
+    accept: ".xml,application/xml,text/xml",
+    hint: "XML del CFDI tipo Pago (REP)",
   },
 };
 

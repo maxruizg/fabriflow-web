@@ -67,6 +67,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { OrderDetailPanel } from "~/components/orders/order-detail-panel";
+import { listPaymentComplementsForInvoice } from "~/lib/payment-complements-api.server";
 
 export const meta: MetaFunction = () => [
   { title: "Órdenes — FabriFlow" },
@@ -92,6 +93,7 @@ const STATUS_LABEL: Record<OrderStatusBackend, string> = {
   incidencia: "Incidencia",
   pendiente_conf: "Pendiente conf.",
   rechazado: "Rechazado",
+  pagada: "Pagada",
 };
 
 function stripCompanyPrefix(id: string): string {
@@ -104,10 +106,17 @@ function normalizeCurrency(c: string): SampleOrder["cur"] {
   return CURRENCY_FALLBACK;
 }
 
+interface RepSummary {
+  count: number;
+  firstFolio: string | null;
+  firstId: string | null;
+}
+
 function toSampleShape(
   o: OrderBackend,
   vendorNameById: Map<string, string>,
   invoiceBalances: Map<string, InvoiceBalance>,
+  repsByInvoice: Map<string, RepSummary>,
 ): SampleOrder {
   const docs: DocType[] = [];
   // The OC is the order itself — once a row exists, the OC document exists,
@@ -119,6 +128,9 @@ function toSampleShape(
   if (o.docState.remUrl) docs.push("REM");
   if (o.docState.ncUrl) docs.push("NC");
   if (o.docState.paymentReceiptUrl) docs.push("PAGO");
+  const invoiceId = o.docState.facInvoiceId;
+  const rep = invoiceId ? repsByInvoice.get(invoiceId) : undefined;
+  if (rep && rep.count > 0) docs.push("REP");
 
   const vendorId = stripCompanyPrefix(o.vendor);
   const vendorName =
@@ -130,8 +142,8 @@ function toSampleShape(
   const ivaRate = typeof o.ivaRate === "number" ? o.ivaRate : 16;
   const totalWithTax = Math.round(o.amount * (1 + ivaRate / 100) * 100) / 100;
 
-  const invoiceBalance = o.docState.facInvoiceId
-    ? invoiceBalances.get(o.docState.facInvoiceId) ?? null
+  const invoiceBalance = invoiceId
+    ? invoiceBalances.get(invoiceId) ?? null
     : null;
 
   return {
@@ -149,6 +161,10 @@ function toSampleShape(
     docState: o.docState,
     folio: o.folio,
     invoiceBalance,
+    paymentMethod: o.paymentMethod ?? null,
+    paymentComplementsCount: rep?.count ?? 0,
+    paymentComplementFirstFolio: rep?.firstFolio ?? null,
+    paymentComplementFirstId: rep?.firstId ?? null,
   };
 }
 
@@ -202,9 +218,44 @@ export async function loader({ request }: LoaderFunctionArgs) {
       if (pair) invoiceBalances.set(pair[0], pair[1]);
     }
 
+    // Para OCs con factura PPD, traemos los REPs (Complementos de Pago) en
+    // paralelo. Es no-fatal: si una falla, esa OC simplemente reporta 0 REPs.
+    const ppdInvoiceIds = response.data
+      .filter((o) => o.paymentMethod === "PPD" && o.docState.facInvoiceId)
+      .map((o) => o.docState.facInvoiceId!)
+      .filter((id, idx, arr) => arr.indexOf(id) === idx);
+    const repPairs = await Promise.all(
+      ppdInvoiceIds.map((id) => {
+        const uuid = id.startsWith("invoice:") ? id.slice("invoice:".length) : id;
+        return listPaymentComplementsForInvoice(
+          session.accessToken!,
+          user.company!,
+          uuid,
+        )
+          .then((page) => [id, page] as const)
+          .catch((e: unknown) => {
+            console.warn(
+              `[orders] listPaymentComplementsForInvoice(${uuid}) failed:`,
+              e,
+            );
+            return null;
+          });
+      }),
+    );
+    const repsByInvoice = new Map<string, RepSummary>();
+    for (const pair of repPairs) {
+      if (!pair) continue;
+      const [invId, page] = pair;
+      repsByInvoice.set(invId, {
+        count: page.data.length,
+        firstFolio: page.data[0]?.folio ?? null,
+        firstId: page.data[0]?.id ?? null,
+      });
+    }
+
     return json({
       orders: response.data.map((o) =>
-        toSampleShape(o, vendorNameById, invoiceBalances),
+        toSampleShape(o, vendorNameById, invoiceBalances, repsByInvoice),
       ),
       ordersRaw: response.data,
       vendors,

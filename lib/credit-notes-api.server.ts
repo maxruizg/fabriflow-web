@@ -55,6 +55,13 @@ export async function uploadCreditNote(
   companyId: string,
   xml: File,
   pdf: File | null,
+  /**
+   * Optional. When provided, the backend enforces that the NC's CFDI-relacionado
+   * UUID resolves to this exact invoice — i.e. the NC must belong to the same
+   * invoice the caller has open. Used by the OC-scoped upload flow so a misfiled
+   * NC can't silently attach to a different order's invoice.
+   */
+  expectedInvoiceId?: string | null,
 ): Promise<UploadActionResult<CreditNoteUploadPayload>> {
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}/api/credit-notes/upload`;
@@ -62,6 +69,7 @@ export async function uploadCreditNote(
   const fd = new FormData();
   fd.append("xml", xml);
   if (pdf) fd.append("pdf", pdf);
+  if (expectedInvoiceId) fd.append("expected_invoice_id", expectedInvoiceId);
 
   const response = await fetch(url, {
     method: "POST",

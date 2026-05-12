@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { cn } from "~/lib/utils";
 
-export type DocType = "OC" | "FAC" | "REM" | "NC" | "PAGO";
+export type DocType = "OC" | "FAC" | "REM" | "NC" | "PAGO" | "REP";
 
 const SHORT: Record<DocType, string> = {
   OC: "OC",
@@ -10,6 +10,7 @@ const SHORT: Record<DocType, string> = {
   REM: "RE",
   NC: "NC",
   PAGO: "PG",
+  REP: "CP",
 };
 const LONG: Record<DocType, string> = {
   OC: "Orden de compra",
@@ -17,6 +18,7 @@ const LONG: Record<DocType, string> = {
   REM: "Remito",
   NC: "Nota de crédito",
   PAGO: "Comprobante de pago",
+  REP: "Complemento de Pago (CFDI)",
 };
 
 export interface DocChipProps extends React.HTMLAttributes<HTMLSpanElement> {

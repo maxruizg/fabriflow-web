@@ -465,7 +465,72 @@ export interface UploadStep {
   error?: string | null;
 }
 
-export type DocKind = "oc" | "rem" | "nc" | "pago";
+export type DocKind = "oc" | "rem" | "nc" | "pago" | "comppago";
+
+/**
+ * CFDI tipo "P" (Pago) — Complemento de Pagos / REP estructurado tal como
+ * lo persiste `payment_complement` en be-v2. No confundir con el tipo legacy
+ * `PaymentComplement` (web-v1, declarado más arriba en este mismo archivo)
+ * que se usa dentro de la unión `Complement` para la vista de facturas
+ * tradicional.
+ */
+export interface PaymentComplementCfdi {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted: boolean;
+  deletedAt?: string | null;
+  company: string;
+  vendor?: string | null;
+  uuid: string;
+  folio: string;
+  serie?: string | null;
+  fechaEmision: string;
+  fechaEntrada: string;
+  fechaTimbrado: string;
+  rfcEmisor: string;
+  nombreEmisor: string;
+  rfcReceptor: string;
+  nombreReceptor: string;
+  montoTotal: number;
+  moneda: string;
+  lugarExpedicion: string;
+  noCertificadoSat?: string | null;
+  rfcProvCertif?: string | null;
+  versionPago: string;
+  pdfKey?: string | null;
+  xmlKey?: string | null;
+}
+
+export interface PaymentComplementDoctoRel {
+  id: string;
+  createdAt: string;
+  paymentComplementId: string;
+  company: string;
+  invoice?: string | null;
+  pagoIndex: number;
+  fechaPago: string;
+  formaDePagoP: string;
+  monedaP: string;
+  montoP: number;
+  tipoCambioP?: number | null;
+  idDocumento: string;
+  serieDr?: string | null;
+  folioDr?: string | null;
+  monedaDr: string;
+  equivalenciaDr?: number | null;
+  numParcialidad: number;
+  impSaldoAnt: number;
+  impPagado: number;
+  impSaldoInsoluto: number;
+  objetoImpDr?: string | null;
+}
+
+export interface PaymentComplementUploadPayload {
+  paymentComplement: PaymentComplementCfdi;
+  doctos: PaymentComplementDoctoRel[];
+  affectedInvoiceIds: string[];
+}
 
 export interface UploadActionResult<TPayload = unknown> {
   ok: boolean;
