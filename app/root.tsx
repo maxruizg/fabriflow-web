@@ -19,7 +19,8 @@ import { json } from "@remix-run/cloudflare";
 import { AuthProvider } from "~/lib/auth-context";
 import { ThemeProvider } from "~/lib/theme-context";
 import { RoleProvider } from "~/lib/role-context";
-import { getUserFromSession } from "~/lib/session.server";
+import { getAccessTokenFromSession, getUserFromSession } from "~/lib/session.server";
+import { listPendingVendors } from "~/lib/api.server";
 import { ErrorScreen } from "~/components/ui/error-screen";
 import {
   getThemePrefs,
@@ -56,7 +57,29 @@ export const links: LinksFunction = () => [
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = await getUserFromSession(request);
   const themePrefs = await getThemePrefs(request);
-  return json({ user: user || null, themePrefs });
+
+  // Cuenta global de solicitudes de proveedores pendientes — alimenta el badge
+  // de la campana en el topbar y el badge en el sidebar (auth-layout.tsx). Solo
+  // los usuarios factory (admins) las pueden aprobar; para vendors devolvemos 0.
+  // Errores del backend NO deben romper el render — caemos a 0 silenciosamente.
+  let pendingNotificationsCount = 0;
+  if (user && user.company) {
+    const role = (user.role ?? "").toLowerCase();
+    const isVendor = role.includes("vendor") || role.includes("proveedor");
+    if (!isVendor) {
+      const token = await getAccessTokenFromSession(request);
+      if (token) {
+        try {
+          const requests = await listPendingVendors(token, user.company);
+          pendingNotificationsCount = requests.length;
+        } catch (err) {
+          console.warn("Failed to load pending notifications count:", err);
+        }
+      }
+    }
+  }
+
+  return json({ user: user || null, themePrefs, pendingNotificationsCount });
 }
 
 export async function action({ request }: ActionFunctionArgs) {

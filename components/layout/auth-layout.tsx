@@ -1,4 +1,4 @@
-import { Form, Link, useLocation, useMatches } from "@remix-run/react";
+import { Form, Link, useLocation, useMatches, useRouteLoaderData } from "@remix-run/react";
 import { useState } from "react";
 
 import { useUser } from "~/lib/auth-context";
@@ -34,6 +34,7 @@ const PRIMARY_NAV: NavItem[] = [
   { name: "Multipagos", href: "/multipayments", icon: "pay", permissions: ["payments:create"], factoryOnly: true },
   { name: "Proveedores", href: "/providers", icon: "vendors", permissions: ["vendors:read", "vendors:manage"], factoryOnly: true },
   { name: "Reportes", href: "/reports", icon: "reports", permissions: ["reports:read", "reports:export"] },
+  { name: "Notificaciones", href: "/notifications", icon: "bell", permissions: ["users:manage", "vendors:manage", "*"], factoryOnly: true },
 ];
 
 const SECONDARY_NAV: NavItem[] = [
@@ -170,10 +171,24 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * Reads the live pending-notifications count from the root loader. Used to
+ * decorate the "Notificaciones" sidebar item and the bell icon in the topbar.
+ * Returns 0 when the count is unavailable (anonymous, vendor user, or fetch
+ * error in the root loader) so callers can always render safely.
+ */
+function usePendingNotificationsCount(): number {
+  const data = useRouteLoaderData("root") as
+    | { pendingNotificationsCount?: number }
+    | undefined;
+  return data?.pendingNotificationsCount ?? 0;
+}
+
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
   const { user } = useUser();
   const { role } = useRole();
+  const pendingCount = usePendingNotificationsCount();
 
   const userPerms = user?.permissions ?? [];
   const canSeeRoute = (perms: string[]) => {
@@ -195,7 +210,14 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     );
   };
 
-  const primary = PRIMARY_NAV.filter(showItem);
+  // Inject the live pending count onto the Notificaciones nav item — keep the
+  // base PRIMARY_NAV definition static and clone only the entry that needs it.
+  const decorate = (it: NavItem): NavItem =>
+    it.href === "/notifications" && pendingCount > 0
+      ? { ...it, count: pendingCount }
+      : it;
+
+  const primary = PRIMARY_NAV.filter(showItem).map(decorate);
   const secondary = SECONDARY_NAV.filter(showItem);
 
   return (
@@ -261,6 +283,7 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
   const location = useLocation();
   const { role } = useRole();
   const cta = ctaForRoute(matches, location.pathname, role);
+  const pendingCount = usePendingNotificationsCount();
 
   return (
     <header
@@ -299,12 +322,27 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
         </label>
 
         <Button
+          asChild
           variant="ghost"
           size="icon"
-          aria-label="Notificaciones"
-          className="text-ink-2"
+          aria-label={
+            pendingCount > 0
+              ? `Notificaciones (${pendingCount} pendientes)`
+              : "Notificaciones"
+          }
+          className="relative text-ink-2"
         >
-          <Icon name="bell" size={15} />
+          <Link to="/notifications">
+            <Icon name="bell" size={15} />
+            {pendingCount > 0 ? (
+              <span
+                className="absolute -top-0.5 -right-0.5 grid min-w-[16px] h-[16px] place-items-center rounded-full bg-clay px-1 font-mono text-[10px] text-paper"
+                aria-hidden="true"
+              >
+                {pendingCount > 9 ? "9+" : pendingCount}
+              </span>
+            ) : null}
+          </Link>
         </Button>
 
         {cta ? (

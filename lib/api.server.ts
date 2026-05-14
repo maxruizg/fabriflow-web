@@ -732,6 +732,37 @@ export interface VendorActionResponse {
   status: string;
 }
 
+export interface PendingVendorRequest {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  requestedAt: string;
+  vendorCompanyId: string | null;
+  vendorCompanyName: string | null;
+  vendorCompanyRfc: string | null;
+  linkStatus: string | null;
+}
+
+/**
+ * List pending vendor-link requests for the authenticated buyer company.
+ * Surfaces them on the in-app /notifications screen.
+ */
+export async function listPendingVendors(
+  token: string,
+  companyId: string
+): Promise<PendingVendorRequest[]> {
+  return apiRequest<PendingVendorRequest[]>(
+    '/api/vendors/pending',
+    {
+      method: 'GET',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
 /**
  * Approve a pending vendor
  */
