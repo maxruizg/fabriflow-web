@@ -268,6 +268,42 @@ export interface PaymentListFilters {
   vendor?: string;
   dateFrom?: string;
   dateTo?: string;
+  /** When ≥ 2, returns only payments with at least this many allocations
+   *  (used by the Multipagos tab). */
+  minAllocations?: number;
+}
+
+export interface PaymentExtractedMeta {
+  amount: number | null;
+  currency: string | null;
+  date: string | null;
+  reference: string | null;
+  bank: string | null;
+}
+
+export interface CreatePaymentPayload {
+  vendor: string;
+  folio: string;
+  date: string;
+  amount: number;
+  currency: string;
+  method: PaymentMethodBackend;
+  bankInfo?: BankInfo | null;
+  fxRate?: number | null;
+  allocations?: PaymentAllocation[];
+}
+
+export interface FinalizeMultipaymentResult {
+  orderId: string;
+  orderStatus: string;
+  invoiceId: string;
+  outstanding: number;
+  paid: number;
+}
+
+export interface FinalizeMultipaymentResponse {
+  payment: PaymentBackend;
+  results: FinalizeMultipaymentResult[];
 }
 
 export interface PaymentListResponse {
@@ -705,6 +741,127 @@ export function fetchPayment(
     withCompanyHeader(token, companyId),
     token,
   );
+}
+
+/**
+ * Crea un pago con N allocations en una sola llamada. Devuelve el `Payment`
+ * persistido (con `id`) listo para que el caller suba el comprobante y
+ * finalice el multipago.
+ */
+export function createPayment(
+  token: string,
+  companyId: string,
+  payload: CreatePaymentPayload,
+): Promise<PaymentBackend> {
+  return apiRequest<PaymentBackend>(
+    `/api/payments`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    token,
+  );
+}
+
+/**
+ * Sube el archivo del comprobante a Supabase y deja el URL guardado en
+ * `payment.receipt_url`. Paso 2 del flujo de multipago.
+ */
+export async function uploadPaymentReceiptToPayment(
+  token: string,
+  companyId: string,
+  paymentId: string,
+  file: File,
+): Promise<PaymentBackend> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiRequest<PaymentBackend>(
+    `/api/payments/${encodeURIComponent(paymentId)}/receipt`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+      },
+      body: fd,
+    },
+    token,
+  );
+}
+
+/**
+ * Lee un comprobante (PDF/imagen/XML) y devuelve los metadatos detectados —
+ * amount, currency, date, reference, bank — para pre-llenar el formulario de
+ * multipago. No persiste nada.
+ */
+export async function extractReceiptPdf(
+  token: string,
+  companyId: string,
+  file: File,
+): Promise<PaymentExtractedMeta> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiRequest<PaymentExtractedMeta>(
+    `/api/payments/extract-pdf`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+      },
+      body: fd,
+    },
+    token,
+  );
+}
+
+/**
+ * Paso 3 del multipago: toma un `Payment` con allocations + comprobante ya
+ * subido, y propaga el efecto a cada OC vinculada (attach + recompute +
+ * evaluate_pagada_for_invoice). Idempotente.
+ */
+export function finalizeMultipayment(
+  token: string,
+  companyId: string,
+  paymentId: string,
+): Promise<FinalizeMultipaymentResponse> {
+  return apiRequest<FinalizeMultipaymentResponse>(
+    `/api/payments/${encodeURIComponent(paymentId)}/finalize`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    },
+    token,
+  );
+}
+
+/**
+ * Orquesta el ciclo completo de un multipago: crear payment → subir
+ * comprobante → finalizar. Si cualquiera de los pasos falla intermedios,
+ * deja el progreso en backend para que el usuario pueda reintentar
+ * (`finalizeMultipayment` es idempotente).
+ */
+export async function submitMultipayment(
+  token: string,
+  companyId: string,
+  args: {
+    payload: CreatePaymentPayload;
+    receiptFile: File;
+  },
+): Promise<FinalizeMultipaymentResponse> {
+  const payment = await createPayment(token, companyId, args.payload);
+  await uploadPaymentReceiptToPayment(token, companyId, payment.id, args.receiptFile);
+  return finalizeMultipayment(token, companyId, payment.id);
 }
 
 export function fetchAging(

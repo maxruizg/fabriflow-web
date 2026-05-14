@@ -31,6 +31,7 @@ const PRIMARY_NAV: NavItem[] = [
   { name: "Facturas", href: "/invoices", icon: "file", permissions: ["invoices:read", "invoices:manage"] },
   { name: "Notas de crédito", href: "/credit-notes", icon: "file", permissions: ["credit_notes:read", "invoices:read", "invoices:manage"] },
   { name: "Pagos", href: "/payments", icon: "pay", permissions: [] },
+  { name: "Multipagos", href: "/multipayments", icon: "pay", permissions: ["payments:create"], factoryOnly: true },
   { name: "Proveedores", href: "/providers", icon: "vendors", permissions: ["vendors:read", "vendors:manage"], factoryOnly: true },
   { name: "Reportes", href: "/reports", icon: "reports", permissions: ["reports:read", "reports:export"] },
 ];
