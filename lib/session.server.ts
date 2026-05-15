@@ -146,6 +146,33 @@ export async function getCompaniesFromSession(request: Request): Promise<UserCom
   return session.get("companies") || null;
 }
 
+/**
+ * Reemplaza la lista `companies` en la sesión. Usado, por ejemplo, después de
+ * activar el modo comprador para que `/select-company` muestre la nueva
+ * Operación Principal sin requerir re-login. Devuelve los headers Set-Cookie
+ * para que el caller los anexe a su Response.
+ */
+export async function setCompaniesInSession({
+  request,
+  companies,
+  requiresCompanySelection: requires,
+}: {
+  request: Request;
+  companies: UserCompanyInfo[];
+  requiresCompanySelection?: boolean;
+}): Promise<{ headers: { "Set-Cookie": string } }> {
+  const session = await sessionStorage.getSession(request.headers.get("Cookie"));
+  session.set("companies", companies);
+  if (requires !== undefined) {
+    session.set("requiresCompanySelection", requires);
+  }
+  return {
+    headers: {
+      "Set-Cookie": await sessionStorage.commitSession(session),
+    },
+  };
+}
+
 export async function requiresCompanySelection(request: Request): Promise<boolean> {
   const session = await sessionStorage.getSession(request.headers.get("Cookie"));
   return session.get("requiresCompanySelection") === true;

@@ -1,13 +1,18 @@
 import { useMemo, useState } from "react";
 import type { MetaFunction, LoaderFunctionArgs } from "@remix-run/cloudflare";
-import { Link, useLoaderData, useRevalidator } from "@remix-run/react";
+import { Form, Link, useLoaderData, useNavigation, useRevalidator } from "@remix-run/react";
 import { json } from "@remix-run/cloudflare";
 
 import {
   requireUser,
   getFullSession,
 } from "~/lib/session.server";
-import { fetchInvoices, fetchAllInvoices } from "~/lib/api.server";
+import {
+  fetchInvoices,
+  fetchAllInvoices,
+  fetchPendingBuyerActivation,
+  type PendingBuyerActivation,
+} from "~/lib/api.server";
 import { useUser } from "~/lib/auth-context";
 import { useRole } from "~/lib/role-context";
 import { cn, statusTone, statusLabel } from "~/lib/utils";
@@ -228,6 +233,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let topProveedores: Array<{ nombre: string; monto: number; facturas: number }> = [];
 
   let errorMsg: string | null = null;
+  let pendingBuyerActivation: PendingBuyerActivation | null = null;
+
+  // Solo mostramos el banner de activación a usuarios cuyo rol activo es
+  // Vendor. Para Admins/SuperAdmins no aplica: ya operan como comprador.
+  if (isVendor && token) {
+    pendingBuyerActivation = await fetchPendingBuyerActivation(token);
+  }
 
   try {
     if (!token || !companyId) {
@@ -336,6 +348,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     user,
     roleType,
     permissions,
+    pendingBuyerActivation,
     vendorMetrics,
     metrics: {
       totalRevenue,
@@ -437,6 +450,10 @@ function DashboardBody({ data }: DashboardBodyProps) {
           options={PERIOD_OPTIONS}
         />
       </header>
+
+      {showVendorView && data.pendingBuyerActivation ? (
+        <BuyerModeBanner activation={data.pendingBuyerActivation} />
+      ) : null}
 
       {showVendorView && data.vendorMetrics ? (
         <VendorKpis metrics={data.vendorMetrics} />
@@ -886,6 +903,57 @@ function ActivityCard({ isVendor }: { isVendor: boolean }) {
             </Timeline.Item>
           ))}
         </Timeline>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------- Buyer-mode activation banner ----------
+
+function BuyerModeBanner({
+  activation,
+}: {
+  activation: PendingBuyerActivation;
+}) {
+  const navigation = useNavigation();
+  const isActivating =
+    navigation.state !== "idle" &&
+    navigation.formAction === "/dashboard/activate-buyer-mode";
+
+  return (
+    <Card className="border-clay/30 bg-clay-soft">
+      <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-start gap-3">
+          <span className="grid h-9 w-9 flex-shrink-0 place-items-center rounded-md bg-clay text-paper">
+            <Icon name="vendors" size={16} />
+          </span>
+          <div>
+            <p className="text-[13px] font-medium text-clay-deep">
+              ¿Quieres que tus proveedores te entreguen como tú entregas?
+            </p>
+            <p className="mt-0.5 text-[12px] text-ink-2">
+              Activa la operación de comprador para{" "}
+              <strong>{activation.companyName}</strong> y empieza a invitar a
+              tus propios proveedores. Usaremos los mismos datos que ya nos
+              compartiste.
+            </p>
+          </div>
+        </div>
+        <Form method="post" action="/dashboard/activate-buyer-mode">
+          <input
+            type="hidden"
+            name="companyId"
+            value={activation.companyId}
+          />
+          <Button
+            type="submit"
+            variant="clay"
+            className="whitespace-nowrap"
+            disabled={isActivating}
+          >
+            {isActivating ? "Activando…" : "Activar modo comprador"}
+          </Button>
+        </Form>
       </CardContent>
     </Card>
   );

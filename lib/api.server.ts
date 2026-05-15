@@ -311,6 +311,57 @@ export async function validateUserToken(token: string): Promise<User> {
   }, token);
 }
 
+export interface PendingBuyerActivation {
+  companyId: string;
+  companyName: string;
+}
+
+/**
+ * Lee `pendingBuyerActivation` desde `/api/user/me`. Devuelve null si la
+ * respuesta no incluye el campo (caso normal: el usuario ya activó modo
+ * comprador o no tiene una company propia pendiente).
+ */
+export async function fetchPendingBuyerActivation(
+  token: string,
+): Promise<PendingBuyerActivation | null> {
+  try {
+    const raw = await apiRequest<{ pendingBuyerActivation?: PendingBuyerActivation | null }>(
+      '/api/user/me',
+      { method: 'GET' },
+      token,
+    );
+    return raw?.pendingBuyerActivation ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ActivateBuyerModeResponse {
+  success: boolean;
+  message: string;
+  company: { id: string; name: string };
+  membershipId: string;
+}
+
+/**
+ * Activa el modo comprador sobre la company propia del usuario (resuelta en
+ * backend vía RFC). Idempotente: si ya estaba activada, devuelve la membresía
+ * existente sin error.
+ */
+export async function activateBuyerMode(
+  token: string,
+  companyId: string,
+): Promise<ActivateBuyerModeResponse> {
+  return apiRequest<ActivateBuyerModeResponse>(
+    '/api/companies/activate-buyer-mode',
+    {
+      method: 'POST',
+      headers: { 'X-Company-Id': companyId },
+    },
+    token,
+  );
+}
+
 export interface CompanyInfo {
   id: string;
   name: string;

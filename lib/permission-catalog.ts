@@ -31,6 +31,11 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     label: "Órdenes de compra",
     permissions: [
       { key: "orders:read", label: "Ver OCs" },
+      {
+        key: "orders:read:own",
+        label: "Ver OCs propias (proveedor)",
+        hint: "Solo OCs donde la compañía activa es el proveedor",
+      },
       { key: "orders:create", label: "Crear OCs" },
       {
         key: "orders:authorize",
