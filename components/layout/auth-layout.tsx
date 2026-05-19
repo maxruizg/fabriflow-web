@@ -21,6 +21,12 @@ interface NavItem {
   permissions: string[];
   /** Hide for vendor role (e.g. admin-only items). */
   factoryOnly?: boolean;
+  /**
+   * When set, the item is only shown if the matching root-loader flag is
+   * `true`. Used for one-shot, state-dependent CTAs (e.g. "Plataforma" only
+   * appears for vendors that still need to activate buyer mode).
+   */
+  visibleWhen?: "pendingBuyerActivation";
   /** Optional badge count — wired in Phase 4 once the data is real. */
   count?: number;
 }
@@ -40,6 +46,13 @@ const PRIMARY_NAV: NavItem[] = [
 const SECONDARY_NAV: NavItem[] = [
   { name: "Usuarios", href: "/users", icon: "vendors", permissions: ["*"] },
   { name: "Empresa", href: "/settings/company", icon: "settings", permissions: [] },
+  {
+    name: "Plataforma",
+    href: "/settings/platform",
+    icon: "settings",
+    permissions: [],
+    visibleWhen: "pendingBuyerActivation",
+  },
 ];
 
 interface RouteCta {
@@ -184,11 +197,24 @@ function usePendingNotificationsCount(): number {
   return data?.pendingNotificationsCount ?? 0;
 }
 
+/**
+ * True when the active vendor user still has a pending buyer-mode activation
+ * (Super Admin on their own company with `buyer_mode = false`). Gates the
+ * "Plataforma" sidebar item — once activated, the item disappears.
+ */
+function useHasPendingBuyerActivation(): boolean {
+  const data = useRouteLoaderData("root") as
+    | { hasPendingBuyerActivation?: boolean }
+    | undefined;
+  return data?.hasPendingBuyerActivation === true;
+}
+
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
   const { user } = useUser();
   const { role } = useRole();
   const pendingCount = usePendingNotificationsCount();
+  const hasPendingBuyerActivation = useHasPendingBuyerActivation();
 
   const userPerms = user?.permissions ?? [];
   const canSeeRoute = (perms: string[]) => {
@@ -200,6 +226,9 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const showItem = (it: NavItem) => {
     if (!canSeeRoute(it.permissions)) return false;
     if (it.factoryOnly && role !== "factory") return false;
+    if (it.visibleWhen === "pendingBuyerActivation" && !hasPendingBuyerActivation) {
+      return false;
+    }
     return true;
   };
 

@@ -84,6 +84,17 @@ export function getStatusBadge(status: string): JSX.Element {
   return <span className={TONE_CLASS[tone]}>{label}</span>;
 }
 
+/**
+ * True when the given backend role string represents a vendor/provider role.
+ * The backend emits "Vendor" today; the legacy `proveedor` spelling is kept
+ * for tolerance with older fixtures and any future localized variants.
+ */
+export function isVendorRole(role: string | undefined | null): boolean {
+  if (!role) return false;
+  const r = role.toLowerCase();
+  return r.includes("vendor") || r.includes("proveedor");
+}
+
 /** Return the bar color modifier class for an aging bucket index (0..4). */
 export function agingBarTone(index: number): string {
   switch (index) {

@@ -20,7 +20,7 @@ import { AuthProvider } from "~/lib/auth-context";
 import { ThemeProvider } from "~/lib/theme-context";
 import { RoleProvider } from "~/lib/role-context";
 import { getAccessTokenFromSession, getUserFromSession } from "~/lib/session.server";
-import { listPendingVendors } from "~/lib/api.server";
+import { fetchPendingBuyerActivation, listPendingVendors } from "~/lib/api.server";
 import { ErrorScreen } from "~/components/ui/error-screen";
 import {
   getThemePrefs,
@@ -63,11 +63,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // los usuarios factory (admins) las pueden aprobar; para vendors devolvemos 0.
   // Errores del backend NO deben romper el render — caemos a 0 silenciosamente.
   let pendingNotificationsCount = 0;
+  // Indica si el vendor todavía no ha activado el modo comprador sobre su
+  // company propia. Alimenta la visibilidad del item "Plataforma" en el
+  // sidebar; ese item lleva al usuario al CTA para auto-activarse.
+  let hasPendingBuyerActivation = false;
   if (user && user.company) {
     const role = (user.role ?? "").toLowerCase();
     const isVendor = role.includes("vendor") || role.includes("proveedor");
+    const token = await getAccessTokenFromSession(request);
     if (!isVendor) {
-      const token = await getAccessTokenFromSession(request);
       if (token) {
         try {
           const requests = await listPendingVendors(token, user.company);
@@ -76,10 +80,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
           console.warn("Failed to load pending notifications count:", err);
         }
       }
+    } else if (token) {
+      const pending = await fetchPendingBuyerActivation(token);
+      hasPendingBuyerActivation = pending !== null;
     }
   }
 
-  return json({ user: user || null, themePrefs, pendingNotificationsCount });
+  return json({
+    user: user || null,
+    themePrefs,
+    pendingNotificationsCount,
+    hasPendingBuyerActivation,
+  });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
