@@ -1,8 +1,9 @@
 import { Form, Link, useLocation, useMatches, useRouteLoaderData } from "@remix-run/react";
-import { useState } from "react";
+import { useMemo } from "react";
 
 import { useUser } from "~/lib/auth-context";
 import { useRole } from "~/lib/role-context";
+import { useSidebar } from "~/lib/sidebar-context";
 import { cn } from "~/lib/utils";
 import { Icon, type IconName } from "~/components/ui/icon";
 import { Button } from "~/components/ui/button";
@@ -34,7 +35,7 @@ interface NavItem {
 const PRIMARY_NAV: NavItem[] = [
   { name: "Panel", href: "/dashboard", icon: "dash", permissions: ["dashboard:read"] },
   { name: "Órdenes", href: "/orders", icon: "orders", permissions: [], factoryOnly: false },
-  { name: "Facturas", href: "/invoices", icon: "file", permissions: ["invoices:read", "invoices:manage"] },
+  { name: "Facturas", href: "/invoices", icon: "file", permissions: [] },
   { name: "Notas de crédito", href: "/credit-notes", icon: "file", permissions: ["credit_notes:read", "invoices:read", "invoices:manage"] },
   { name: "Pagos", href: "/payments", icon: "pay", permissions: [] },
   { name: "Multipagos", href: "/multipayments", icon: "pay", permissions: ["payments:create"], factoryOnly: true },
@@ -44,7 +45,8 @@ const PRIMARY_NAV: NavItem[] = [
 ];
 
 const SECONDARY_NAV: NavItem[] = [
-  { name: "Usuarios", href: "/users", icon: "vendors", permissions: ["*"] },
+  { name: "Usuarios", href: "/users", icon: "vendors", permissions: ["users:read", "users:create", "users:update", "users:delete", "*"] },
+  { name: "Roles", href: "/settings/roles", icon: "settings", permissions: ["users:update", "*"] },
   { name: "Empresa", href: "/settings/company", icon: "settings", permissions: [] },
   {
     name: "Plataforma",
@@ -62,8 +64,14 @@ interface RouteCta {
 function ctaForRoute(
   matches: ReturnType<typeof useMatches>,
   pathname: string,
-  role: "factory" | "vendor",
+  userPermissions: string[],
 ): { label: string; to: string; icon: IconName } | null {
+  // Helper para verificar si el usuario tiene alguno de los permisos
+  const hasPermission = (perms: string[]) => {
+    if (userPermissions.includes("*")) return true;
+    return perms.some(p => userPermissions.includes(p));
+  };
+
   // 1) any matched route can opt into a custom CTA via `handle.cta`
   for (const m of matches) {
     const h = m.handle as RouteCta | undefined;
@@ -77,38 +85,49 @@ function ctaForRoute(
     }
   }
 
-  // 2) sensible defaults by route + role
+  // 2) sensible defaults by route + permissions
   if (pathname.startsWith("/orders")) {
-    return role === "factory"
-      ? { label: "Nueva OC", to: "/orders/new", icon: "plus" }
-      : { label: "Subir documento", to: "/orders", icon: "upload" };
+    if (hasPermission(["orders:create", "orders:manage"])) {
+      return { label: "Nueva OC", to: "/orders/new", icon: "plus" };
+    }
+    return null;
   }
   if (pathname.startsWith("/invoices") || pathname.startsWith("/invoice/")) {
-    // Solo vendors pueden subir facturas
-    return role === "vendor"
-      ? { label: "Subir factura", to: "/invoices/new", icon: "upload" }
-      : null;
+    if (hasPermission(["invoices:create", "invoices:manage"])) {
+      return { label: "Subir factura", to: "/invoices/new", icon: "upload" };
+    }
+    return null;
   }
   if (pathname.startsWith("/payments")) {
-    return role === "factory"
-      ? { label: "Registrar pago", to: "/payments/new", icon: "plus" }
-      : { label: "Subir comprobante", to: "/payments", icon: "upload" };
+    if (hasPermission(["payments:create", "payments:manage"])) {
+      return { label: "Registrar pago", to: "/payments/new", icon: "plus" };
+    }
+    return null;
   }
   if (pathname.startsWith("/reports")) {
-    return { label: "Exportar PDF", to: "/reports", icon: "download" };
+    if (hasPermission(["reports:read", "reports:export"])) {
+      return { label: "Exportar PDF", to: "/reports", icon: "download" };
+    }
+    return null;
   }
-  // dashboard / vendors / users → role-based universal CTA
+  // dashboard → CTA basado en permisos
   if (pathname === "/dashboard") {
-    return role === "vendor"
-      ? { label: "Subir factura", to: "/invoices/new", icon: "upload" }
-      : { label: "Nueva OC", to: "/orders/new", icon: "plus" };
+    if (hasPermission(["invoices:create", "invoices:manage"])) {
+      return { label: "Subir factura", to: "/invoices/new", icon: "upload" };
+    }
+    if (hasPermission(["orders:create", "orders:manage"])) {
+      return { label: "Nueva OC", to: "/orders/new", icon: "plus" };
+    }
+    return null;
   }
   // Default para otras rutas
-  return role === "factory"
-    ? { label: "Nueva OC", to: "/orders/new", icon: "plus" }
-    : role === "vendor"
-    ? { label: "Subir factura", to: "/invoices/new", icon: "upload" }
-    : null;
+  if (hasPermission(["orders:create", "orders:manage"])) {
+    return { label: "Nueva OC", to: "/orders/new", icon: "plus" };
+  }
+  if (hasPermission(["invoices:create", "invoices:manage"])) {
+    return { label: "Subir factura", to: "/invoices/new", icon: "upload" };
+  }
+  return null;
 }
 
 function avatarInitials(name?: string): string {
@@ -307,11 +326,13 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function Topbar({ onMenu }: { onMenu: () => void }) {
+function Topbar({ onMenu, sidebarOpen }: { onMenu: () => void; sidebarOpen: boolean }) {
   const matches = useMatches();
   const location = useLocation();
+  const { user } = useUser();
   const { role } = useRole();
-  const cta = ctaForRoute(matches, location.pathname, role);
+  const userPermissions = user?.permissions ?? [];
+  const cta = ctaForRoute(matches, location.pathname, userPermissions);
   const pendingCount = usePendingNotificationsCount();
 
   return (
@@ -325,10 +346,10 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
       <button
         type="button"
         onClick={onMenu}
-        aria-label="Abrir menú"
-        className="lg:hidden rounded-md p-1.5 text-ink-2 hover:text-ink hover:bg-paper-3"
+        aria-label={sidebarOpen ? "Cerrar menú" : "Abrir menú"}
+        className="rounded-md p-1.5 text-ink-2 hover:text-ink hover:bg-paper-3"
       >
-        <Icon name="menu" size={18} />
+        <Icon name={sidebarOpen ? "chevl" : "menu"} size={18} />
       </button>
 
       <Breadcrumbs />
@@ -388,7 +409,7 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { sidebarOpen, setSidebarOpen } = useSidebar();
 
   return (
     <div className="h-dvh overflow-hidden bg-background text-foreground">
@@ -402,21 +423,26 @@ function Shell({ children }: { children: React.ReactNode }) {
         />
       ) : null}
 
-      <div className="flex h-full">
+      <div className="flex h-full relative">
         {/* Sidebar */}
         <div
           className={cn(
-            "fixed inset-y-0 left-0 z-50 w-[260px] transform transition-transform duration-200 ease-out",
-            "lg:static lg:translate-x-0 lg:w-[248px] lg:flex-shrink-0",
-            sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
+            "absolute inset-y-0 left-0 z-50 w-[220px] lg:w-[200px] transform transition-all duration-200 ease-out",
+            sidebarOpen ? "translate-x-0" : "-translate-x-full",
           )}
         >
           <Sidebar onNavigate={() => setSidebarOpen(false)} />
         </div>
 
         {/* Main */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <Topbar onMenu={() => setSidebarOpen(true)} />
+        <div
+          key={`main-${sidebarOpen ? 'open' : 'closed'}`}
+          className={cn(
+            "flex min-w-0 w-full flex-col transition-all duration-200",
+            sidebarOpen ? "lg:pl-[200px]" : "lg:pl-0"
+          )}
+        >
+          <Topbar onMenu={() => setSidebarOpen(!sidebarOpen)} sidebarOpen={sidebarOpen} />
           <main role="main" className="flex-1 min-w-0 overflow-y-auto px-4 py-6 lg:px-8 lg:pt-7 lg:pb-20">
             {children}
           </main>

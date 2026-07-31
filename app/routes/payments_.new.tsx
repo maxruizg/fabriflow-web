@@ -1,18 +1,19 @@
 import { useState } from "react";
 import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/cloudflare";
-import { json } from "@remix-run/cloudflare";
-import { Link, useLoaderData } from "@remix-run/react";
+import { json, redirect } from "@remix-run/cloudflare";
+import { Form, Link, useLoaderData, useNavigate } from "@remix-run/react";
 
-import { requireUser } from "~/lib/session.server";
-import { SAMPLE_VENDORS } from "~/lib/sample-data";
+import { requireUser, getFullSession } from "~/lib/session.server";
+import { fetchInvoices } from "~/lib/api.server";
+import { fetchActiveVendors } from "~/lib/procurement-api.server";
+import type { InvoiceBackend } from "~/types";
+import type { ActiveVendorSummary } from "~/lib/procurement-api.server";
 
 import { AuthLayout } from "~/components/layout/auth-layout";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
-import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Icon } from "~/components/ui/icon";
-import { Dropzone } from "~/components/ui/dropzone";
 import {
   Select,
   SelectContent,
@@ -30,15 +31,66 @@ export const handle = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  await requireUser(request);
-  return json({ vendors: SAMPLE_VENDORS });
+  const user = await requireUser(request);
+  const session = await getFullSession(request);
+
+  if (!session?.accessToken || !user.company) {
+    return json({
+      invoices: [] as InvoiceBackend[],
+      vendors: [] as ActiveVendorSummary[]
+    });
+  }
+
+  const invoicesResponse = await fetchInvoices(session.accessToken, user.company, {
+    estado: "facturada",
+    limit: 200,
+  }).catch(() => ({
+    data: [] as InvoiceBackend[],
+    nextCursor: null,
+    hasMore: false,
+    count: 0,
+  }));
+
+  const vendors = await fetchActiveVendors(session.accessToken, user.company).catch(() => {
+    return [] as ActiveVendorSummary[];
+  });
+
+  return json({
+    invoices: invoicesResponse.data,
+    vendors
+  });
 }
 
 export default function NewPayment() {
-  const { vendors } = useLoaderData<typeof loader>();
+  const { invoices, vendors } = useLoaderData<typeof loader>();
+  const navigate = useNavigate();
   const [vendorId, setVendorId] = useState<string>("");
-  const [method, setMethod] = useState<string>("Transferencia SPEI");
-  const [currency, setCurrency] = useState<string>("MXN");
+  const [invoiceId, setInvoiceId] = useState<string>("");
+
+  // Función para formatear fecha sin hora
+  const formatDate = (dateString: string) => {
+    return dateString.split('T')[0];
+  };
+
+  // Filtrar facturas por el proveedor seleccionado
+  const vendorInvoices = vendorId
+    ? invoices.filter((inv) => inv.vendor === vendorId)
+    : [];
+
+  const selectedInvoice = invoices.find((inv) => inv.id === invoiceId);
+
+  // Reset invoice selection when vendor changes
+  const handleVendorChange = (newVendorId: string) => {
+    setVendorId(newVendorId);
+    setInvoiceId("");
+  };
+
+  // Navigate to upload screen when invoice is selected
+  const handleContinue = () => {
+    if (invoiceId) {
+      navigate(`/payments/${invoiceId}/upload`);
+    }
+  };
 
   return (
     <AuthLayout>
@@ -54,120 +106,125 @@ export default function NewPayment() {
             Registrar <em>pago</em>
           </h1>
           <p className="ff-page-sub">
-            Crea el pago, asígnalo a una o varias facturas y opcionalmente
-            adjunta el comprobante.
+            Selecciona el proveedor y la factura que deseas pagar.
           </p>
         </header>
 
         <Card>
           <CardHeader>
             <CardTitle>
-              Datos <em className="not-italic text-clay">del pago</em>
+              Seleccionar <em className="not-italic text-clay">factura</em>
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <form
-              className="grid grid-cols-1 md:grid-cols-2 gap-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                // TODO(phase-3): POST /api/payments
-              }}
-            >
-              <div className="space-y-1.5 md:col-span-2">
+          <CardContent className="space-y-5">
+            <div className="space-y-2">
+              <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
+                Proveedor
+              </Label>
+              <Select value={vendorId} onValueChange={handleVendorChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecciona un proveedor" />
+                </SelectTrigger>
+                <SelectContent>
+                  {vendors.map((vendor) => (
+                    <SelectItem key={vendor.id} value={vendor.id}>
+                      <div className="flex items-center gap-2">
+                        <span>{vendor.vendorLegalName || vendor.name}</span>
+                        <span className="text-ink-3">·</span>
+                        <span className="font-mono text-ink-3">{vendor.rfc}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {vendorId && (
+              <div className="space-y-2">
                 <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Proveedor
+                  Factura a pagar
                 </Label>
-                <Select value={vendorId} onValueChange={setVendorId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecciona un proveedor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {vendors.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>
-                        {v.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {vendorInvoices.length > 0 ? (
+                  <Select value={invoiceId} onValueChange={setInvoiceId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecciona una factura" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {vendorInvoices.map((inv) => (
+                        <SelectItem key={inv.id} value={inv.id}>
+                          <div className="flex items-center gap-2 text-[12px]">
+                            <span className="font-mono font-medium">{inv.folio}</span>
+                            <span className="text-ink-3">·</span>
+                            <span>{inv.nombreEmisor}</span>
+                            <span className="text-ink-3">·</span>
+                            <span className="font-mono">{inv.uuid.slice(0, 8)}...{inv.uuid.slice(-8)}</span>
+                            <span className="text-ink-3">·</span>
+                            <span className="text-ink-3">{formatDate(inv.fechaEmision)}</span>
+                            <span className="text-ink-3">·</span>
+                            <span className="font-mono font-medium">${inv.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })} {inv.moneda}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="p-4 rounded-md border border-line bg-paper-2 text-center">
+                    <p className="text-[12px] text-ink-3">
+                      Este proveedor no tiene facturas pendientes de pago
+                    </p>
+                  </div>
+                )}
+                {selectedInvoice && (
+                  <div className="mt-2 p-3 rounded-md border border-line bg-paper-2">
+                    <div className="text-[11px] text-ink-3 font-mono uppercase tracking-wider mb-1">
+                      Factura seleccionada
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13px] font-medium">{selectedInvoice.nombreEmisor}</div>
+                        <div className="text-[11px] text-ink-3 font-mono mt-0.5">
+                          {selectedInvoice.folio} · {selectedInvoice.uuid.slice(0, 8)}...{selectedInvoice.uuid.slice(-8)} · {formatDate(selectedInvoice.fechaEmision)}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="font-mono font-medium text-[14px]">
+                          ${selectedInvoice.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                        </div>
+                        <div className="text-[10px] text-ink-3 font-mono">{selectedInvoice.moneda}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
+            )}
 
-              <div className="space-y-1.5">
-                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Fecha
-                </Label>
-                <Input type="date" />
-              </div>
+            <div className="flex items-center gap-2 pt-2">
+              <Button
+                variant="clay"
+                type="button"
+                disabled={!invoiceId}
+                onClick={handleContinue}
+              >
+                <Icon name="chev" size={13} />
+                Continuar
+              </Button>
+              <Button variant="ghost" type="button" asChild>
+                <Link to="/payments">Cancelar</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-              <div className="space-y-1.5">
-                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Método
-                </Label>
-                <Select value={method} onValueChange={setMethod}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Transferencia SPEI">Transferencia SPEI</SelectItem>
-                    <SelectItem value="Wire USD">Wire USD</SelectItem>
-                    <SelectItem value="SEPA">SEPA</SelectItem>
-                    <SelectItem value="Cheque MXN">Cheque MXN</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Moneda
-                </Label>
-                <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="MXN">MXN</SelectItem>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="EUR">EUR</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Importe
-                </Label>
-                <Input type="number" step="0.01" placeholder="0.00" />
-              </div>
-
-              <div className="space-y-1.5 md:col-span-2">
-                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
-                  Referencia / Folio interno
-                </Label>
-                <Input placeholder="PG-2026-####" className="font-mono" />
-              </div>
-
-              <div className="md:col-span-2">
-                <Label className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3 mb-2 block">
-                  Comprobante (opcional)
-                </Label>
-                <Dropzone
-                  title="Sube el comprobante de pago"
-                  hint="PDF o imagen — el proveedor lo verá al confirmar"
-                />
-              </div>
-
-              <div className="md:col-span-2 flex items-center gap-2 pt-2">
-                <Button variant="clay" type="submit">
-                  <Icon name="check" size={13} />
-                  Registrar pago
-                </Button>
-                <Button variant="ghost" type="button" asChild>
-                  <Link to="/payments">Cancelar</Link>
-                </Button>
-                <span className="ml-auto font-mono text-[11px] text-ink-3">
-                  Backend pendiente — guardado real llega en Phase 3
-                </span>
-              </div>
-            </form>
+        <Card className="bg-paper-2">
+          <CardContent className="pt-5">
+            <div className="text-[12px] font-medium mb-2 text-clay">¿Cómo funciona?</div>
+            <ul className="text-[11px] text-ink-3 space-y-1">
+              <li>• Selecciona el proveedor al que le vas a pagar</li>
+              <li>• Selecciona la factura que deseas pagar de ese proveedor</li>
+              <li>• En la siguiente pantalla subirás el comprobante de pago</li>
+              <li>• El sistema extraerá automáticamente el importe del comprobante</li>
+              <li>• El pago se registrará y vinculará a la factura seleccionada</li>
+            </ul>
           </CardContent>
         </Card>
       </div>

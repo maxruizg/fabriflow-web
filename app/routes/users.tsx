@@ -23,7 +23,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Icon } from "~/components/ui/icon";
 import { StatCard } from "~/components/ui/stat-card";
-import { Edit, Mail, Trash2, UserPlus } from "lucide-react";
+import { Mail, Trash2, UserPlus, UserCog } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
   Dialog,
@@ -37,6 +37,9 @@ import { getStatusBadge } from "~/lib/utils";
 import { cn, statusTone, statusLabel } from "~/lib/utils";
 import { requireUser, getFullSession } from "~/lib/session.server";
 import { apiRequest } from "~/lib/api.server";
+import { PERMISSION_GROUPS } from "~/lib/permission-catalog";
+// RBAC PURO: PermCheckboxGroup ya no se usa
+// import { PermCheckboxGroup } from "~/components/users/permission-checkbox-group";
 
 export const meta: MetaFunction = () => {
   return [
@@ -47,6 +50,22 @@ export const meta: MetaFunction = () => {
     },
   ];
 };
+
+// Helper para extraer permisos desde FormData
+function extractPermissionsFromFormData(formData: FormData): string[] {
+  const permissions: string[] = [];
+
+  // Iteramos sobre todas las entradas del formData
+  for (const [key, value] of formData.entries()) {
+    // Los checkboxes de permisos tienen names como "perm-dashboard-read", "perm-invoices-read", etc.
+    // y values con el formato "dashboard:read", "invoices:read", etc.
+    if (key.startsWith("perm-") && typeof value === "string" && value.includes(":")) {
+      permissions.push(value);
+    }
+  }
+
+  return permissions;
+}
 
 interface User {
   id: string;
@@ -68,17 +87,29 @@ interface UsersApiResponse {
   totalPages: number;
 }
 
+interface Role {
+  id: string;
+  name: string;
+  color?: string;
+  isSystemRole: boolean;
+  isDeletable: boolean;
+  permissions: string[];
+}
+
+// RBAC PURO: Interfaces PermissionInfo y PermissionCategory eliminadas
+
+// RBAC PURO: Permission overrides eliminados
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const user = await requireUser(request);
   const session = await getFullSession(request);
 
   if (!session?.accessToken || !user.company) {
-    return json({ users: [], error: "Sesión inválida", total: 0 });
+    return json({ users: [], roles: [], error: "Sesión inválida", total: 0 });
   }
 
   try {
     // Fetch only internal users (exclude vendors)
-    const response = await apiRequest<UsersApiResponse>(
+    const usersResponse = await apiRequest<UsersApiResponse>(
       "/api/users?excludeVendors=true",
       {
         method: "GET",
@@ -89,15 +120,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       session.accessToken
     );
 
+    // Fetch available roles
+    const rolesResponse = await apiRequest<Role[]>(
+      "/api/roles",
+      {
+        method: "GET",
+        headers: {
+          "X-Company-Id": user.company,
+        },
+      },
+      session.accessToken
+    );
+
+    console.log("[DEBUG] Roles loaded:", rolesResponse);
+    console.log("[DEBUG] Roles count:", rolesResponse?.length || 0);
+
     return json({
-      users: response.data || [],
-      total: response.total || 0,
+      users: usersResponse.data || [],
+      roles: rolesResponse || [],
+      total: usersResponse.total || 0,
       error: null,
     });
   } catch (error) {
     console.error("Error loading users:", error);
+    console.error("Error details:", error instanceof Error ? error.message : String(error));
     return json({
       users: [],
+      roles: [],
       total: 0,
       error: "Error al cargar usuarios",
     });
@@ -122,19 +171,9 @@ export async function action({ request }: ActionFunctionArgs) {
     const role = formData.get("role") as string;
 
     // Obtener permisos seleccionados
-    const permissions: string[] = [];
-
-    if (role === "super_admin") {
-      permissions.push("*");
-    } else {
-      if (formData.get("perm-dashboard")) permissions.push("dashboard:read");
-      if (formData.get("perm-invoices-read")) permissions.push("invoices:read");
-      if (formData.get("perm-invoices-delete")) permissions.push("invoices:delete");
-      if (formData.get("perm-payments-read")) permissions.push("payments:read");
-      if (formData.get("perm-payments-create")) permissions.push("payments:create");
-      if (formData.get("perm-payments-delete")) permissions.push("payments:delete");
-      if (formData.get("perm-reports")) permissions.push("reports:read");
-    }
+    const permissions: string[] = role === "super_admin"
+      ? ["*"]
+      : extractPermissionsFromFormData(formData);
 
     if (!name || !email || !role) {
       return json({ success: false, intent: "create", error: "Todos los campos son requeridos" }, { status: 400 });
@@ -191,45 +230,7 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   }
 
-  if (intent === "updatePermissions") {
-    const userId = formData.get("userId") as string;
-
-    if (!userId) {
-      return json({ success: false, intent: "updatePermissions", error: "ID de usuario requerido" }, { status: 400 });
-    }
-
-    const permissions: string[] = [];
-    if (formData.get("perm-dashboard")) permissions.push("dashboard:read");
-    if (formData.get("perm-invoices-read")) permissions.push("invoices:read");
-    if (formData.get("perm-invoices-delete")) permissions.push("invoices:delete");
-    if (formData.get("perm-payments-read")) permissions.push("payments:read");
-    if (formData.get("perm-payments-create")) permissions.push("payments:create");
-    if (formData.get("perm-payments-delete")) permissions.push("payments:delete");
-    if (formData.get("perm-reports")) permissions.push("reports:read");
-
-    try {
-      const cleanUserId = userId.replace("user:", "");
-
-      await apiRequest(
-        `/api/users/${cleanUserId}/permissions`,
-        {
-          method: "PUT",
-          headers: {
-            "X-Company-Id": user.company,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ permissions }),
-        },
-        session.accessToken
-      );
-
-      return json({ success: true, intent: "updatePermissions", message: "Permisos actualizados exitosamente" });
-    } catch (error) {
-      console.error("Error updating permissions:", error);
-      const errorMessage = error instanceof Error ? error.message : "Error al actualizar permisos";
-      return json({ success: false, intent: "updatePermissions", error: errorMessage }, { status: 500 });
-    }
-  }
+  // RBAC PURO: updatePermissions eliminado - usar cambio de rol
 
   if (intent === "delete") {
     const userId = formData.get("userId") as string;
@@ -260,6 +261,38 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   }
 
+  if (intent === "changeRole") {
+    const userId = formData.get("userId") as string;
+    const roleId = formData.get("roleId") as string;
+
+    if (!userId || !roleId) {
+      return json({ success: false, intent: "changeRole", error: "ID de usuario y rol requeridos" }, { status: 400 });
+    }
+
+    try {
+      const cleanUserId = userId.replace("user:", "");
+
+      await apiRequest(
+        `/api/users/${cleanUserId}/role`,
+        {
+          method: "POST",
+          headers: {
+            "X-Company-Id": user.company,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ roleId }),
+        },
+        session.accessToken
+      );
+
+      return json({ success: true, intent: "changeRole", message: "Rol actualizado exitosamente" });
+    } catch (error) {
+      console.error("Error changing role:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error al cambiar el rol";
+      return json({ success: false, intent: "changeRole", error: errorMessage }, { status: 500 });
+    }
+  }
+
   return json({ success: false, intent: null, error: "Acción no válida" }, { status: 400 });
 }
 
@@ -278,116 +311,22 @@ function getRoleBadge(role: string | undefined) {
 
 // ---------- permission checkbox group (shared between create/edit forms) ----------
 
-interface PermCheckboxGroupProps {
-  checkedPerms: string[];
-  onToggle?: (perm: string) => void;
-  /** If true, uses defaultChecked (uncontrolled) for the create form. */
-  uncontrolled?: boolean;
-}
-
-function PermCheckboxGroup({ checkedPerms, onToggle, uncontrolled }: PermCheckboxGroupProps) {
-  return (
-    <div className="rounded-lg border border-line p-4 space-y-4 bg-paper-2">
-      <label className="flex items-center gap-2 text-[13px] text-ink-2">
-        <input
-          type="checkbox"
-          id={uncontrolled ? "perm-dashboard" : "edit-perm-dashboard"}
-          name="perm-dashboard"
-          className="rounded accent-clay"
-          {...(uncontrolled ? { defaultChecked: true } : {
-            checked: checkedPerms.includes("dashboard:read"),
-            onChange: () => onToggle?.("dashboard:read"),
-          })}
-        />
-        Ver Dashboard
-      </label>
-
-      <div className="space-y-2">
-        <p className="text-[10px] font-mono uppercase tracking-wider text-ink-3">Facturas</p>
-        <div className="grid grid-cols-2 gap-2 pl-2">
-          <label className="flex items-center gap-2 text-[13px] text-ink-2">
-            <input
-              type="checkbox"
-              id={uncontrolled ? "perm-invoices-read" : "edit-perm-invoices-read"}
-              name="perm-invoices-read"
-              className="rounded accent-clay"
-              {...(uncontrolled ? { defaultChecked: true } : {
-                checked: checkedPerms.includes("invoices:read"),
-                onChange: () => onToggle?.("invoices:read"),
-              })}
-            />
-            Ver facturas
-          </label>
-          <label className="flex items-center gap-2 text-[13px] text-ink-2">
-            <input
-              type="checkbox"
-              id={uncontrolled ? "perm-invoices-delete" : "edit-perm-invoices-delete"}
-              name="perm-invoices-delete"
-              className="rounded accent-clay"
-              {...(uncontrolled ? { defaultChecked: false } : {
-                checked: checkedPerms.includes("invoices:delete"),
-                onChange: () => onToggle?.("invoices:delete"),
-              })}
-            />
-            Borrar facturas
-          </label>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <p className="text-[10px] font-mono uppercase tracking-wider text-ink-3">Pagos</p>
-        <div className="grid grid-cols-3 gap-2 pl-2">
-          {[
-            { id: "perm-payments-read", editId: "edit-perm-payments-read", key: "payments:read", label: "Ver pagos" },
-            { id: "perm-payments-create", editId: "edit-perm-payments-create", key: "payments:create", label: "Crear pagos" },
-            { id: "perm-payments-delete", editId: "edit-perm-payments-delete", key: "payments:delete", label: "Borrar pagos" },
-          ].map((p) => (
-            <label key={p.key} className="flex items-center gap-2 text-[13px] text-ink-2">
-              <input
-                type="checkbox"
-                id={uncontrolled ? p.id : p.editId}
-                name={p.id}
-                className="rounded accent-clay"
-                {...(uncontrolled ? { defaultChecked: false } : {
-                  checked: checkedPerms.includes(p.key),
-                  onChange: () => onToggle?.(p.key),
-                })}
-              />
-              {p.label}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <label className="flex items-center gap-2 text-[13px] text-ink-2">
-        <input
-          type="checkbox"
-          id={uncontrolled ? "perm-reports" : "edit-perm-reports"}
-          name="perm-reports"
-          className="rounded accent-clay"
-          {...(uncontrolled ? { defaultChecked: false } : {
-            checked: checkedPerms.includes("reports:read"),
-            onChange: () => onToggle?.("reports:read"),
-          })}
-        />
-        Ver reportes
-      </label>
-    </div>
-  );
-}
-
 // ---------- main component ----------
 
 export default function Users() {
-  const { users, error, total } = useLoaderData<typeof loader>();
+  const { users, roles: rawRoles, error, total } = useLoaderData<typeof loader>();
+  const roles = (rawRoles || []).filter((r): r is NonNullable<typeof r> => r != null);
+  console.log("[DEBUG Component] Roles from loader:", roles);
+  console.log("[DEBUG Component] Roles count:", roles?.length || 0);
+
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [selectedRole, setSelectedRole] = useState("");
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [editPermissions, setEditPermissions] = useState<string[]>([]);
   const [deletingUser, setDeletingUser] = useState<User | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [changingRoleUser, setChangingRoleUser] = useState<User | null>(null);
+  const [isChangeRoleDialogOpen, setIsChangeRoleDialogOpen] = useState(false);
+  const [newRoleId, setNewRoleId] = useState("");
   const revalidator = useRevalidator();
   const fetcher = useFetcher();
 
@@ -397,7 +336,7 @@ export default function Users() {
         success?: boolean;
         error?: string;
         message?: string;
-        intent?: "create" | "resendInvitation" | "updatePermissions" | "delete" | null;
+        intent?: "create" | "resendInvitation" | "delete" | "changeRole" | null;
       }
     | undefined;
 
@@ -411,14 +350,15 @@ export default function Users() {
   useEffect(() => {
     if (fetcher.state === "idle" && actionData?.success) {
       setIsDialogOpen(false);
-      setIsEditDialogOpen(false);
       setIsDeleteDialogOpen(false);
+      setIsChangeRoleDialogOpen(false);
       setSelectedRole("");
-      setEditingUser(null);
-      setEditPermissions([]);
       setDeletingUser(null);
+      setChangingRoleUser(null);
+      setNewRoleId("");
+      revalidator.revalidate();
     }
-  }, [fetcher.state]);
+  }, [fetcher.state, actionData, revalidator]);
 
   useEffect(() => {
     if (fetcher.state !== "idle" || !actionData) return;
@@ -435,24 +375,21 @@ export default function Users() {
     return () => clearTimeout(id);
   }, [flash]);
 
-  const handleEditUser = (user: User) => {
-    setEditingUser(user);
-    setEditPermissions(user.permissions || []);
-    setIsEditDialogOpen(true);
-  };
-
-  const togglePermission = (permission: string) => {
-    setEditPermissions((prev) =>
-      prev.includes(permission)
-        ? prev.filter((p) => p !== permission)
-        : [...prev, permission]
-    );
-  };
+  // RBAC PURO: handleEditUser y togglePermission eliminados
 
   const handleDeleteUser = (user: User) => {
     setDeletingUser(user);
     setIsDeleteDialogOpen(true);
   };
+
+  const handleChangeRole = (user: User) => {
+    setChangingRoleUser(user);
+    setNewRoleId("");
+    setIsChangeRoleDialogOpen(true);
+  };
+
+  // Get selected role details
+  const selectedRoleForChange = roles?.find((r) => r.id === newRoleId);
 
   if (error) {
     return (
@@ -597,12 +534,6 @@ export default function Users() {
                     </p>
                   </div>
 
-                  {selectedRole === "admin" && (
-                    <div className="space-y-2">
-                      <label className="text-[12px] font-medium uppercase tracking-wider text-ink-3">Permisos</label>
-                      <PermCheckboxGroup checkedPerms={[]} uncontrolled />
-                    </div>
-                  )}
                 </div>
 
                 {actionData?.error && actionData.intent === "create" && (
@@ -622,55 +553,7 @@ export default function Users() {
             </DialogContent>
           </Dialog>
 
-          {/* Edit permissions dialog (non-trigger, opened programmatically) */}
-          <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-            <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Editar Permisos</DialogTitle>
-                <DialogDescription>
-                  Modifica los permisos de {editingUser?.name || editingUser?.email}
-                </DialogDescription>
-              </DialogHeader>
-              <fetcher.Form method="post">
-                <input type="hidden" name="intent" value="updatePermissions" />
-                <input type="hidden" name="userId" value={editingUser?.id || ""} />
-                <div className="grid gap-4 py-4">
-                  <div className="space-y-1">
-                    <p className="text-[13px] font-medium text-ink">{editingUser?.name}</p>
-                    <p className="text-[12px] text-ink-3">{editingUser?.email}</p>
-                  </div>
-
-                  {editingUser && isSuperAdmin(editingUser) ? (
-                    <div className="rounded-lg bg-rust-soft/50 border border-rust/20 p-3 text-[13px] text-rust-deep">
-                      Los Super Admin tienen acceso total y no se pueden editar sus permisos.
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <label className="text-[12px] font-medium uppercase tracking-wider text-ink-3">Permisos</label>
-                      <PermCheckboxGroup checkedPerms={editPermissions} onToggle={togglePermission} />
-                    </div>
-                  )}
-                </div>
-
-                {actionData?.error && actionData.intent === "updatePermissions" && isEditDialogOpen && (
-                  <div className="text-[13px] text-wine bg-wine-soft border border-wine/20 p-3 rounded-lg mb-4">
-                    {actionData.error}
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)}>
-                    Cancelar
-                  </Button>
-                  {editingUser && !isSuperAdmin(editingUser) && (
-                    <Button type="submit" variant="clay" disabled={isSubmitting}>
-                      {isSubmitting ? "Guardando..." : "Guardar Permisos"}
-                    </Button>
-                  )}
-                </div>
-              </fetcher.Form>
-            </DialogContent>
-          </Dialog>
+          {/* RBAC PURO: Diálogo de edición de permisos eliminado */}
 
           {/* Delete confirmation dialog */}
           <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
@@ -704,6 +587,132 @@ export default function Users() {
                   <input type="hidden" name="userId" value={deletingUser?.id || ""} />
                   <Button type="submit" variant="destructive" disabled={isSubmitting}>
                     {isSubmitting ? "Eliminando..." : "Eliminar"}
+                  </Button>
+                </fetcher.Form>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Change role dialog */}
+          <Dialog open={isChangeRoleDialogOpen} onOpenChange={setIsChangeRoleDialogOpen}>
+            <DialogContent className="sm:max-w-[650px] max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Cambiar Rol de Usuario</DialogTitle>
+                <DialogDescription>
+                  Selecciona el nuevo rol para este usuario. Los permisos se actualizarán automáticamente según el rol.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="py-4 space-y-4">
+                <div className="rounded-lg bg-paper-2 border border-line p-4">
+                  <p className="text-[13px] font-medium text-ink">{changingRoleUser?.name}</p>
+                  <p className="text-[12px] text-ink-3">{changingRoleUser?.email}</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-[11px] text-ink-3 uppercase tracking-wider">Rol actual:</span>
+                    {getRoleBadge(changingRoleUser?.roleName || changingRoleUser?.role)}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="new-role" className="text-[12px] font-medium uppercase tracking-wider text-ink-3">
+                    Nuevo Rol *
+                  </label>
+                  <select
+                    id="new-role"
+                    className="w-full h-10 rounded-md border border-line bg-paper px-3 text-[13px] text-ink focus:outline-none focus:ring-1 focus:ring-clay/50"
+                    value={newRoleId}
+                    onChange={(e) => {
+                      console.log("[DEBUG] Role selected:", e.target.value);
+                      setNewRoleId(e.target.value);
+                    }}
+                    required
+                  >
+                    <option value="">Seleccionar rol</option>
+                    {(() => {
+                      const filteredRoles = (roles || []).filter(r => !r.isSystemRole || r.name.toLowerCase() !== "super admin");
+                      console.log("[DEBUG] Filtered roles for selector:", filteredRoles);
+                      return filteredRoles.map((role) => (
+                        <option key={role.id} value={role.id}>
+                          {role.name} {role.isSystemRole ? "(Sistema)" : `(${role.permissions.length} permisos)`}
+                        </option>
+                      ));
+                    })()}
+                  </select>
+                </div>
+
+                {/* Show permissions for selected role */}
+                {selectedRoleForChange && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[12px] font-medium uppercase tracking-wider text-ink-3">
+                        Permisos que tendrá el usuario
+                      </label>
+                      <span className="text-[11px] font-mono text-ink-3">
+                        {selectedRoleForChange.permissions.includes("*")
+                          ? "Acceso total"
+                          : `${selectedRoleForChange.permissions.length} permisos`}
+                      </span>
+                    </div>
+
+                    {selectedRoleForChange.permissions.includes("*") ? (
+                      <div className="rounded-lg bg-moss-soft border border-moss/20 p-4 text-center">
+                        <Icon name="check" size={20} className="text-moss-deep mx-auto mb-2" />
+                        <p className="text-[13px] font-medium text-moss-deep">Acceso Total al Sistema</p>
+                        <p className="text-[11px] text-moss-deep/80 mt-1">Este rol tiene todos los permisos disponibles</p>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-line bg-paper-2 p-3 max-h-[300px] overflow-y-auto">
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {PERMISSION_GROUPS.map((group) => {
+                            const groupPerms = group.permissions.filter(p =>
+                              selectedRoleForChange.permissions.includes(p.key)
+                            );
+                            if (groupPerms.length === 0) return null;
+
+                            return (
+                              <div key={group.key} className="space-y-1.5">
+                                <div className="font-mono text-[10px] uppercase tracking-wider text-ink-3">
+                                  {group.label}
+                                </div>
+                                <ul className="space-y-1">
+                                  {groupPerms.map((p) => (
+                                    <li key={p.key} className="flex items-start gap-1.5">
+                                      <Icon name="check" size={12} className="text-moss-deep mt-0.5 shrink-0" />
+                                      <div className="flex-1 min-w-0">
+                                        <span className="block text-[12px] text-ink leading-tight">
+                                          {p.label}
+                                        </span>
+                                        {p.hint && (
+                                          <span className="block text-[10px] text-ink-3 leading-tight mt-0.5">
+                                            {p.hint}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {actionData?.error && actionData.intent === "changeRole" && isChangeRoleDialogOpen && (
+                <div className="text-[13px] text-wine bg-wine-soft border border-wine/20 p-3 rounded-lg mb-4">
+                  {actionData.error}
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setIsChangeRoleDialogOpen(false)}>
+                  Cancelar
+                </Button>
+                <fetcher.Form method="post" className="inline">
+                  <input type="hidden" name="intent" value="changeRole" />
+                  <input type="hidden" name="userId" value={changingRoleUser?.id || ""} />
+                  <input type="hidden" name="roleId" value={newRoleId} />
+                  <Button type="submit" variant="clay" disabled={isSubmitting || !newRoleId}>
+                    {isSubmitting ? "Cambiando..." : "Cambiar Rol"}
                   </Button>
                 </fetcher.Form>
               </div>
@@ -813,14 +822,17 @@ export default function Users() {
                             </Button>
                           </fetcher.Form>
                         )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title="Editar permisos"
-                          onClick={() => handleEditUser(user as User)}
-                        >
-                          <Edit className="h-4 w-4 text-ink-3" />
-                        </Button>
+                        {!isSuperAdmin(user) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            title="Cambiar rol"
+                            className="hover:text-clay-deep hover:bg-clay-soft"
+                            onClick={() => handleChangeRole(user as User)}
+                          >
+                            <UserCog className="h-4 w-4" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"

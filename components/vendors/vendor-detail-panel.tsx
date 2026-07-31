@@ -2,15 +2,11 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Icon } from "~/components/ui/icon";
 import { DeliveryHeatmap, type HeatLevel } from "~/components/ui/delivery-heatmap";
-import {
-  fmtCurrency,
-  STATUS_TONE,
-  type SampleVendor,
-} from "~/lib/sample-data";
+import type { ActiveVendorSummary } from "~/lib/procurement-api.server";
 import { cn } from "~/lib/utils";
 
 interface VendorDetailPanelProps {
-  vendor: SampleVendor | null;
+  vendor: ActiveVendorSummary | null;
   className?: string;
 }
 
@@ -51,8 +47,8 @@ export function VendorDetailPanel({ vendor, className }: VendorDetailPanelProps)
     );
   }
 
-  const m = fmtCurrency(vendor.outstanding, vendor.currency);
-  const statusTone = STATUS_TONE[vendor.status] ?? "ink";
+  const displayName = vendor.vendorLegalName || vendor.name;
+  const initials = displayName.slice(0, 2).toUpperCase();
 
   return (
     <aside
@@ -66,64 +62,42 @@ export function VendorDetailPanel({ vendor, className }: VendorDetailPanelProps)
       <div className="p-5 border-b border-line">
         <div className="flex items-start gap-3">
           <span className="grid h-13 w-13 place-items-center rounded-md bg-clay-soft text-clay-deep font-display text-[18px] font-semibold flex-shrink-0" style={{ width: 52, height: 52 }}>
-            {vendor.short}
+            {initials}
           </span>
           <div className="flex-1 min-w-0">
             <h3 className="font-display text-[18px] font-medium leading-tight">
-              {vendor.name}
+              {displayName}
             </h3>
             <div className="text-[12px] text-ink-3 mt-0.5 truncate">
-              {vendor.city} · {vendor.category}
+              {vendor.rfc}
             </div>
             <div className="flex items-center gap-2 mt-2">
-              <Badge tone={statusTone}>{vendor.status}</Badge>
-              <Badge tone={RISK_TONE[vendor.risk]}>Riesgo {vendor.risk}</Badge>
-              <span className="text-[10.5px] font-mono text-ink-3">
-                · desde {vendor.since}
-              </span>
+              <Badge tone="moss">Activo</Badge>
             </div>
           </div>
         </div>
       </div>
 
       {/* KPI grid */}
-      <div className="grid grid-cols-2 gap-x-5 gap-y-4 p-5 border-b border-line">
-        <Field label="Contacto" value={vendor.contact} />
-        <Field label="Órdenes activas" value={String(vendor.active)} />
-        <Field
-          label="Calificación"
-          value={
-            <>
-              {vendor.rating.toFixed(1)}
-              <span className="ml-1 text-[10.5px] text-ink-3">/ 5.0</span>
-            </>
-          }
-        />
-        <Field label="Moneda" value={<span className="font-mono">{vendor.currency}</span>} />
+      <div className="grid grid-cols-1 gap-y-4 p-5 border-b border-line">
+        <Field label="Email" value={vendor.email} />
+        <Field label="Teléfono" value={vendor.phone || "—"} />
+        <Field label="WhatsApp" value={vendor.whatsappPhone || "—"} />
+        <Field label="Contacto" value={vendor.name} />
       </div>
 
-      {/* Outstanding */}
+      {/* Scorecard pendiente */}
       <div className="p-5 border-b border-line">
         <div className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3 mb-1.5">
-          Saldo pendiente
+          Scorecard
         </div>
-        <div className="ff-stat-val ff-num">
-          <span className="text-[18px] italic font-normal text-ink-3 mr-1">
-            {m.symbol}
-          </span>
-          {m.integer}
-          <span className="text-ink-3 text-[20px]">.{m.decimal}</span>
-          <span className="ml-1.5 text-[12px] font-mono text-ink-3 align-baseline">
-            {m.code}
-          </span>
-        </div>
-        <div className="text-[11px] text-ink-3 mt-1.5 font-mono">
-          {vendor.active} órdenes abiertas · próx. vence 12 may 2026
+        <div className="text-[12px] text-ink-3">
+          La información de desempeño, saldo y riesgo estará disponible próximamente.
         </div>
       </div>
 
       {/* Heatmap */}
-      <div className="p-5 border-b border-line">
+      <div className="p-5 border-b border-line hidden">
         <div className="flex items-center justify-between mb-3">
           <div className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3">
             Entregas últimos 24 meses
@@ -144,9 +118,6 @@ export function VendorDetailPanel({ vendor, className }: VendorDetailPanelProps)
           values={vendorHeatmap(vendor.id)}
           label={`Desempeño mensual de ${vendor.name}`}
         />
-        <div className="mt-2 font-mono text-[11px] text-ink-3">
-          Promedio a tiempo: <span className="text-ink">{vendor.onTime}%</span>
-        </div>
       </div>
 
       {/* Documents registry */}

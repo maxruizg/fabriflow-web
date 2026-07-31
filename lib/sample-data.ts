@@ -37,6 +37,10 @@ export interface SampleOrder {
   id: string;
   vendor: string;
   vendorId: string;
+  /** Company (buyer/client) name — shown when user is a vendor viewing their orders */
+  company?: string;
+  /** Company (buyer/client) ID — used for filtering when user is a vendor */
+  companyId?: string;
   date: string;
   due: string;
   amount: number;
@@ -172,20 +176,22 @@ export function fmtCurrency(n: number, cur: "MXN" | "USD" | "EUR" = "MXN"): { sy
 }
 
 /** Status → tone mirror of design's STATUS_TONE. */
-export const STATUS_TONE: Record<string, "moss" | "clay" | "rust" | "wine" | "ink"> = {
-  Creada: "rust",
-  Autorizada: "moss",
-  Facturada: "clay",
-  Recibido: "moss",
-  "En tránsito": "clay",
-  Confirmado: "moss",
-  "Revisión calidad": "rust",
-  Cerrado: "ink",
-  Incidencia: "wine",
-  "Pendiente conf.": "rust",
-  Rechazado: "wine",
-  Pagada: "moss",
-  Activo: "moss",
-  "En revisión": "rust",
-  Atrasado: "wine",
+export const STATUS_TONE: Record<string, "moss" | "clay" | "rust" | "wine" | "ink" | "amber" | "blue" | "orange" | "purple" | "green" | "teal" | "red"> = {
+  Creada: "amber",
+  Autorizada: "blue",
+  Facturada: "purple",
+  Recibido: "orange",
+  "En tránsito": "orange",
+  Confirmado: "orange",
+  "Revisión calidad": "orange",
+  Cerrado: "teal",
+  Completada: "teal",
+  Incidencia: "red",
+  "Pendiente conf.": "orange",
+  Rechazado: "red",
+  Rechazada: "red",
+  Pagada: "green",
+  Activo: "green",
+  "En revisión": "orange",
+  Atrasado: "red",
 };

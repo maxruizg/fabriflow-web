@@ -7,6 +7,7 @@
 // All errors propagate as `ApiServerError` from `api.server.ts`.
 
 import { apiRequest } from "./api.server";
+import type { InvoiceBackend } from "~/types";
 
 // ============================================================================
 // Types — match the camelCase JSON shapes emitted by the Rust handlers.
@@ -62,6 +63,7 @@ export interface OrderBackend {
   due: string | null;
   amount: number;
   currency: string;
+  balance: number;
   itemsCount: number;
   items?: OrderItem[];
   notes?: string | null;
@@ -218,17 +220,10 @@ export interface OrderListResponse {
 }
 
 export type PaymentMethodBackend =
-  | { kind: "TransferenciaSPEI" }
-  | { kind: "WireUSD" }
-  | { kind: "SEPA" }
-  | { kind: "ChequeMxn" }
-  | { kind: "Other"; value: string };
-
-export type PaymentStatusBackend =
-  | "programado"
-  | "pendiente_conf"
-  | "confirmado"
-  | "rechazado";
+  | "transferencia_spei"
+  | "wire_usd"
+  | "sepa"
+  | "cheque_mxn";
 
 export interface BankInfo {
   bank: string;
@@ -239,14 +234,33 @@ export interface BankInfo {
 
 export interface PaymentAllocation {
   invoiceId: string;
+  invoiceFolio: string;
+  invoiceUuidAbbrev: string;
+  invoiceDate: string;
+  invoiceTotal: number;
+  invoiceBalance: number;
+  invoiceCurrency: string;
   amount: number;
   percentage: number;
+  fxRate: number;
+}
+
+/** Lo que se envía al crear/finalizar un (multi)pago — a diferencia de
+ *  `PaymentAllocation` (forma enriquecida de respuesta), esto es solo lo que
+ *  el formulario conoce: cuánto (en la moneda de la FACTURA) y a qué tipo de
+ *  cambio se convierte a la moneda del pago (1 si comparten moneda). */
+export interface PaymentAllocationInput {
+  invoiceId: string;
+  amount: number;
+  percentage: number;
+  fxRate: number;
 }
 
 export interface PaymentBackend {
   id: string;
   company: string;
   vendor: string;
+  orderId: string | null;
   folio: string;
   date: string;
   amount: number;
@@ -254,7 +268,6 @@ export interface PaymentBackend {
   method: PaymentMethodBackend;
   bankInfo: BankInfo | null;
   fxRate: number | null;
-  status: PaymentStatusBackend;
   receiptUrl: string | null;
   allocations: PaymentAllocation[];
   createdAt: string;
@@ -264,7 +277,6 @@ export interface PaymentBackend {
 export interface PaymentListFilters {
   cursor?: string;
   limit?: number;
-  status?: string;
   vendor?: string;
   dateFrom?: string;
   dateTo?: string;
@@ -290,7 +302,19 @@ export interface CreatePaymentPayload {
   method: PaymentMethodBackend;
   bankInfo?: BankInfo | null;
   fxRate?: number | null;
-  allocations?: PaymentAllocation[];
+  allocations?: PaymentAllocationInput[];
+}
+
+/** Factura `Facturada` de un proveedor con su saldo pendiente REAL (no el
+ *  total original) — usado por el picker de facturas del multipago. */
+export interface OutstandingInvoiceSummary {
+  id: string;
+  folio: string;
+  uuid: string;
+  fechaEmision: string;
+  moneda: string;
+  total: number;
+  outstanding: number;
 }
 
 export interface FinalizeMultipaymentResult {
@@ -585,6 +609,18 @@ export async function deleteOrderDoc(
   );
 }
 
+export function fetchInvoice(
+  token: string,
+  companyId: string,
+  id: string,
+): Promise<InvoiceBackend> {
+  return apiRequest<InvoiceBackend>(
+    `/api/invoices/${encodeURIComponent(id)}`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
+}
+
 /** Lectura independiente del saldo (para vistas que no acaban de subir un comprobante). */
 export function fetchInvoiceBalance(
   token: string,
@@ -702,6 +738,7 @@ export async function deleteCompanyLogo(
 export interface ActiveVendorSummary {
   id: string;
   name: string;
+  vendorLegalName: string | null;
   rfc: string;
   email: string;
   phone: string | null;
@@ -740,6 +777,23 @@ export function fetchPayment(
     `/api/payments/${encodeURIComponent(id)}`,
     withCompanyHeader(token, companyId),
     token,
+  );
+}
+
+/**
+ * Lista pagos que tienen allocations a una factura específica
+ */
+export async function listPaymentsForInvoice(
+  token: string,
+  companyId: string,
+  invoiceId: string,
+): Promise<PaymentBackend[]> {
+  // Obtenemos todos los pagos (con un límite razonable)
+  const response = await fetchPayments(token, companyId, { limit: 500 });
+
+  // Filtramos los que tienen allocations a esta factura
+  return response.data.filter(payment =>
+    payment.allocations.some(alloc => alloc.invoiceId === invoiceId)
   );
 }
 
@@ -789,6 +843,30 @@ export async function uploadPaymentReceiptToPayment(
         "X-Company-Id": companyId,
       },
       body: fd,
+    },
+    token,
+  );
+}
+
+/**
+ * Elimina un (multi)pago. Si estaba adjunto a una o más OCs, el backend
+ * revierte cada una (detach, recompute de saldo, downgrade de Pagada a su
+ * estado anterior) antes de marcar el pago como eliminado. Requiere el
+ * permiso `payments:delete`.
+ */
+export function deletePayment(
+  token: string,
+  companyId: string,
+  paymentId: string,
+): Promise<{ ok: boolean }> {
+  return apiRequest<{ ok: boolean }>(
+    `/api/payments/${encodeURIComponent(paymentId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Company-Id": companyId,
+      },
     },
     token,
   );
@@ -862,6 +940,20 @@ export async function submitMultipayment(
   const payment = await createPayment(token, companyId, args.payload);
   await uploadPaymentReceiptToPayment(token, companyId, payment.id, args.receiptFile);
   return finalizeMultipayment(token, companyId, payment.id);
+}
+
+/** Facturas `Facturada` de un proveedor específico con saldo pendiente real —
+ *  alimenta el picker de facturas del formulario de multipago. */
+export function fetchOutstandingInvoicesForVendor(
+  token: string,
+  companyId: string,
+  vendorId: string,
+): Promise<OutstandingInvoiceSummary[]> {
+  return apiRequest<OutstandingInvoiceSummary[]>(
+    `/api/invoices/outstanding${qs({ vendorId })}`,
+    withCompanyHeader(token, companyId),
+    token,
+  );
 }
 
 export function fetchAging(

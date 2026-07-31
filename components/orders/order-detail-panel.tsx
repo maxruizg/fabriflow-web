@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Form, Link, useFetcher, useNavigation, useRevalidator } from "@remix-run/react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 
+import { useRole } from "~/lib/role-context";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -45,13 +46,28 @@ interface OrderDetailPanelProps {
 }
 
 const SENDABLE_STATUS = new Set([
-  "Autorizada",
-  "Facturada",
-  "En tránsito",
-  "Revisión calidad",
-  "Confirmado",
-  "Pendiente conf.",
+  "autorizada",
+  "facturada",
+  "en_transito",
+  "revision_calidad",
+  "confirmado",
+  "pendiente_conf",
 ]);
+
+const STATUS_LABEL: Record<string, string> = {
+  creada: "Creada",
+  autorizada: "Autorizada",
+  facturada: "Facturada",
+  recibido: "Recibido",
+  en_transito: "En tránsito",
+  confirmado: "Confirmado",
+  revision_calidad: "Revisión calidad",
+  cerrado: "Cerrado",
+  incidencia: "Incidencia",
+  pendiente_conf: "Pendiente conf.",
+  rechazado: "Rechazado",
+  pagada: "Pagada",
+};
 
 function hasAny(perms: string[], required: string[]): boolean {
   if (perms.includes("*")) return true;
@@ -111,7 +127,7 @@ function shortenFileName(name: string, max = 22): string {
 
 function docRowsFor(
   order: SampleOrder,
-  opts: { canUploadInvoice?: boolean; canUploadPayment?: boolean } = {},
+  opts: { canUploadInvoice?: boolean; canUploadPayment?: boolean; canUploadCreditNote?: boolean } = {},
 ): DocRowSpec[] {
   const ds = order.docState;
   const has = (t: DocType) => order.docs.includes(t);
@@ -139,10 +155,18 @@ function docRowsFor(
   // OC is implicit: the order existing means the OC exists. The PDF URL is
   // generated lazily by the backend, so we always mark it as "ok" and link
   // to the resource route which materializes/redirects on demand.
+  const hasRem = has("REM") || Boolean(ds?.remUrl);
   const ncUploaded = has("NC") || Boolean(ds?.ncUrl);
-  // NC upload is only meaningful once a factura is linked — otherwise the
-  // backend has no invoice to attach the credit note to.
-  const ncUploadable = facLinked;
+
+  // Flujo de documentos requerido: OC → REM → FAC → PAGO → REP
+  // NC es opcional en cualquier momento después de la factura
+  const canUploadRem = true; // Siempre se puede subir REM después de OC
+  const canUploadFac = hasRem; // Solo se puede subir FAC si existe REM
+  const canUploadNc = facLinked; // NC es opcional, solo si hay factura
+  const canUploadPago = facLinked; // Solo se puede subir PAGO si existe FAC
+  const hasPayment = Boolean(ds?.paymentReceiptUrl); // Solo si hay archivo subido
+  const canUploadRep = hasPayment; // Solo se puede subir REP si existe PAGO
+
   return [
     {
       type: "OC",
@@ -154,25 +178,30 @@ function docRowsFor(
       uploadKind: "oc",
     },
     {
+      type: "REM",
+      label: "Recepción",
+      fileName: fileNameFromUrl(ds?.remUrl),
+      meta: hasRem ? undefined : "Subir después de OC",
+      state: hasRem ? "ok" : "pending",
+      href: ds?.remUrl ?? undefined,
+      uploadKind: canUploadRem ? "rem" : undefined,
+    },
+    {
       type: "FAC",
       label: "Factura (CFDI)",
       fileName: ds?.facInvoiceId ?? undefined,
-      meta: ds?.facInvoiceId ? "CFDI vinculado" : "Vincular desde Facturas",
+      meta: ds?.facInvoiceId
+        ? "CFDI vinculado"
+        : !canUploadFac
+          ? "Sube el remito primero"
+          : "Vincular desde Facturas",
       state: has("FAC") ? "ok" : "pending",
       // FAC is linked from the invoices module — sends the user to the upload flow with this OC preselected.
       uploadHref:
-        opts.canUploadInvoice && !ds?.facInvoiceId
+        opts.canUploadInvoice && !ds?.facInvoiceId && canUploadFac
           ? `/invoices/new?orderId=${order.id}`
           : undefined,
       uploadHrefLabel: "Cargar factura",
-    },
-    {
-      type: "REM",
-      label: "Remito de entrega",
-      fileName: fileNameFromUrl(ds?.remUrl),
-      state: has("REM") ? "ok" : "pending",
-      href: ds?.remUrl ?? undefined,
-      uploadKind: "rem",
     },
     // NC is optional. Row is always rendered; when not uploaded we suppress
     // the "Pendiente" badge so users don't think it's a required doc — they
@@ -184,25 +213,32 @@ function docRowsFor(
       meta: ncUploaded ? undefined : "Opcional",
       state: ncUploaded ? "ok" : "pending",
       href: ds?.ncUrl ?? undefined,
-      uploadKind: ncUploadable ? "nc" : undefined,
+      // NC requiere 2 archivos (XML + PDF opcional), usamos uploadHref para ir a la pantalla completa
+      uploadHref: canUploadNc && opts.canUploadCreditNote !== false ? `/orders/${order.id}/upload-doc?kind=nc` : undefined,
+      uploadHrefLabel: "Cargar nota de crédito",
       hidePendingBadge: true,
     },
     {
       type: "PAGO",
       label: "Comprobante de pago",
       fileName: fileNameFromUrl(ds?.paymentReceiptUrl),
-      meta: pagoMeta,
-      // Estado "ok" si tenemos receipt URL o si el saldo cubre la factura
-      // (segunda condición útil cuando el balance se hidrata desde fuera).
-      state: ds?.paymentReceiptUrl || fullyPaid ? "ok" : "pending",
+      meta: !canUploadPago
+        ? "Vincula la factura primero"
+        : bal
+          ? fullyPaid
+            ? `Pagado · ${money(bal.total)}`
+            : `Pagado ${money(bal.paid)} / ${money(bal.total)} · falta ${money(bal.outstanding)}`
+          : ds?.paymentReceiptUrl
+            ? "PDF / imagen"
+            : "Pendiente",
+      // Estado "ok" SOLO si hay archivo subido - el backend maneja el estado de la orden
+      state: ds?.paymentReceiptUrl ? "ok" : "pending",
       href: ds?.paymentReceiptUrl ?? undefined,
       // Only allow the upload once a factura is linked (the backend enforces this too).
-      uploadKind: opts.canUploadPayment !== false && facLinked ? "pago" : undefined,
+      uploadKind: opts.canUploadPayment !== false && canUploadPago ? "pago" : undefined,
     },
     // Complemento de Pago (CFDI tipo "P" / REP). Sólo para facturas PPD —
-    // SAT no lo requiere para PUE. Si no hay factura vinculada todavía, la
-    // fila se renderiza informativa pero sin upload (el backend igual lo
-    // bloquearía).
+    // SAT no lo requiere para PUE. Solo se puede subir si ya existe el comprobante de pago.
     ...(order.paymentMethod === "PPD" && facLinked
       ? ([
           {
@@ -214,13 +250,15 @@ function docRowsFor(
                 ? `${order.paymentComplementsCount} REP${
                     (order.paymentComplementsCount ?? 0) === 1 ? "" : "s"
                   } cargado${(order.paymentComplementsCount ?? 0) === 1 ? "" : "s"}`
-                : "Requerido para PPD",
+                : !canUploadRep
+                  ? "Sube el comprobante de pago primero"
+                  : "Requerido para PPD",
             state:
               (order.paymentComplementsCount ?? 0) > 0 ? "ok" : "pending",
             // REP upload usa el flujo full-screen (igual que FAC con uploadHref):
             // el endpoint del backend exige el XML del CFDI tipo Pago. El
             // wizard de upload-doc se encarga de mandar el `xml` correctamente.
-            uploadHref: `/orders/${order.id}/upload-doc?kind=comppago`,
+            uploadHref: canUploadRep ? `/orders/${order.id}/upload-doc?kind=comppago` : undefined,
             uploadHrefLabel: "Subir Complemento de Pago (CFDI)",
             // `deleteExtraId` apunta al REP más reciente — el delete inline
             // borrará ese. Si hay múltiples y se quiere borrar uno específico,
@@ -253,19 +291,39 @@ function eventTone(kind: string): TimelineDotTone {
 }
 
 function eventDescription(ev: OrderEvent): string {
-  if (ev.description && ev.description.trim()) return ev.description;
-  switch (ev.kind) {
-    case "created":
-      return "Orden creada";
-    case "authorization":
-      return "Orden autorizada";
-    case "sent_email":
-      return "OC enviada por correo";
-    case "sent_whatsapp":
-      return "OC enviada por WhatsApp";
-    default:
-      return ev.kind;
+  let description = "";
+
+  if (ev.description && ev.description.trim()) {
+    description = ev.description;
+  } else {
+    switch (ev.kind) {
+      case "created":
+        description = "Orden creada";
+        break;
+      case "authorization":
+        description = "Orden autorizada";
+        break;
+      case "sent_email":
+        description = "OC enviada por correo";
+        break;
+      case "sent_whatsapp":
+        description = "OC enviada por WhatsApp";
+        break;
+      default:
+        description = ev.kind;
+    }
   }
+
+  // Reemplazar nombres de documentos por versiones más descriptivas
+  description = description
+    .replace(/Documento REM/gi, "Recepción")
+    .replace(/documento rem/gi, "recepción")
+    .replace(/Documento OC/gi, "Orden de Compra")
+    .replace(/documento oc/gi, "orden de compra")
+    .replace(/\bREM\b/g, "Recepción")
+    .replace(/\bOC\b/g, "Orden de Compra");
+
+  return description;
 }
 
 interface DocRowProps {
@@ -280,14 +338,16 @@ interface DocRowProps {
 function DocRow({ doc, orderId, onUploaded, canDelete }: DocRowProps) {
   const fetcher = useFetcher<UploadActionResult<{ balance?: InvoiceBalance }>>();
   const deleteFetcher = useFetcher<{
-    ok?: boolean;
+    ok: boolean;
+    kind?: string;
     error?: string;
-    result?: { balance: InvoiceBalance | null };
+    result?: { balance?: InvoiceBalance | null; order?: any; affectedInvoiceIds?: string[] };
   }>();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteSuccess, setDeleteSuccess] = useState(false);
 
   const uploading = fetcher.state !== "idle";
   const deleting = deleteFetcher.state !== "idle";
@@ -342,17 +402,34 @@ function DocRow({ doc, orderId, onUploaded, canDelete }: DocRowProps) {
   useEffect(() => {
     if (deleteFetcher.state !== "idle") {
       deleteFiredRef.current = false;
+      setDeleteSuccess(false);
       return;
     }
-    if (deleteFetcher.data?.ok && !deleteFiredRef.current) {
+
+    // Si la eliminación fue exitosa
+    if (deleteFetcher.data?.ok === true && !deleteFiredRef.current) {
       deleteFiredRef.current = true;
-      setDeleteOpen(false);
+      setDeleteSuccess(true);
+
+      // Forzar revalidación para actualizar los datos
       onUploadedRef.current?.();
+
+      // Cerrar el modal inmediatamente
+      setDeleteOpen(false);
+
+      // Resetear el estado de éxito después de 3 segundos
+      setTimeout(() => setDeleteSuccess(false), 3000);
     }
-  }, [deleteFetcher.state, deleteFetcher.data?.ok]);
+
+    // Si hubo un error, NO cerrar el modal para que el usuario vea el error
+  }, [deleteFetcher.state, deleteFetcher.data, doc.type, orderId]);
 
   const confirmDelete = () => {
     if (deleting || !deleteKind) return;
+
+    // Resetear estados antes de eliminar
+    setDeleteSuccess(false);
+
     // REP delete needs `complementId` in the form body — the action forwards
     // to /api/payment-complements/{id}. For doc_state-based kinds the body is
     // empty (server reads kind from query string).
@@ -368,6 +445,17 @@ function DocRow({ doc, orderId, onUploaded, canDelete }: DocRowProps) {
       method: "post",
       action: `/orders/${orderId}/delete-doc?kind=${deleteKind}`,
     });
+  };
+
+  // Resetear estados cuando se abre el modal
+  const handleOpenChange = (open: boolean) => {
+    if (!deleting) {
+      setDeleteOpen(open);
+      if (open) {
+        // Al abrir, limpiar errores previos
+        setDeleteSuccess(false);
+      }
+    }
   };
 
   const onPick = () => {
@@ -469,10 +557,12 @@ function DocRow({ doc, orderId, onUploaded, canDelete }: DocRowProps) {
             <span className="font-mono" title={doc.fileName}>
               {displayFileName}
             </span>
+          ) : doc.meta ? (
+            <span className="text-ink-4">{doc.meta}</span>
           ) : (
-            <span>Aún no recibido</span>
+            <span>Sin documento</span>
           )}
-          {doc.meta ? <span className="ml-2 text-ink-4">· {doc.meta}</span> : null}
+          {displayFileName && doc.meta ? <span className="ml-2 text-ink-4">· {doc.meta}</span> : null}
         </div>
         {fetcher.data?.error || localError ? (
           <div className="mt-1 text-[10.5px] text-wine">
@@ -505,7 +595,7 @@ function DocRow({ doc, orderId, onUploaded, canDelete }: DocRowProps) {
       {showDelete ? (
         <Dialog
           open={deleteOpen}
-          onOpenChange={(o) => (!deleting ? setDeleteOpen(o) : undefined)}
+          onOpenChange={handleOpenChange}
         >
           <DialogContent>
             <DialogHeader>
@@ -514,6 +604,19 @@ function DocRow({ doc, orderId, onUploaded, canDelete }: DocRowProps) {
                 {deleteDialogCopy(deleteKind, doc)}
               </DialogDescription>
             </DialogHeader>
+
+            {deleteFetcher.data?.error && (
+              <div className="rounded-md bg-wine-50 border border-wine-200 p-3 text-[12px] text-wine-900">
+                <div className="flex items-start gap-2">
+                  <Icon name="warn" size={14} className="text-wine-700 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-semibold mb-0.5">Error al eliminar</div>
+                    <div>{deleteFetcher.data.error}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <DialogFooter className="gap-2">
               <Button
                 type="button"
@@ -654,29 +757,49 @@ function PaymentSummary({
     return `${m.symbol}${m.integer}.${m.decimal}`;
   };
   const fullyPaid = balance.outstanding <= 0.01;
+  const paymentProgress = balance.total > 0
+    ? Math.round((balance.paid / balance.total) * 100)
+    : 0;
+
   return (
     <div className="space-y-1.5">
       <SummaryRow label="Total facturado" value={money(balance.total)} />
       <SummaryRow
         label="Pagado"
         value={money(balance.paid)}
-        valueClass={fullyPaid ? "text-moss font-medium" : "text-ink"}
+        valueClass={fullyPaid ? "text-moss font-semibold" : "text-ink"}
+      />
+      <SummaryRow
+        label="Saldo"
+        value={money(balance.outstanding)}
+        valueClass={fullyPaid ? "text-moss font-semibold" : "text-rust font-semibold"}
       />
       {balance.credited > 0.01 ? (
         <SummaryRow label="Notas de crédito" value={money(balance.credited)} />
       ) : null}
       <div className="border-t border-line my-1.5" />
       {fullyPaid ? (
-        <div className="flex items-center gap-1.5 text-[12px] font-medium text-moss">
-          <Icon name="check" size={12} />
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold text-moss bg-moss-soft px-2 py-1.5 rounded">
+          <Icon name="check" size={11} />
           Pagado en su totalidad
         </div>
       ) : (
-        <SummaryRow
-          label="Saldo pendiente"
-          value={money(balance.outstanding)}
-          valueClass="text-rust font-medium"
-        />
+        <>
+          {paymentProgress > 0 && (
+            <div className="mt-1.5">
+              <div className="flex items-center justify-between text-[9px] text-ink-3 mb-0.5">
+                <span>Progreso</span>
+                <span className="font-mono font-semibold">{paymentProgress}%</span>
+              </div>
+              <div className="h-1.5 bg-ink-5 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-moss transition-all duration-300"
+                  style={{ width: `${paymentProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -692,9 +815,9 @@ function SummaryRow({
   valueClass?: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 text-[12px]">
+    <div className="flex items-center justify-between gap-2 text-[10px]">
       <span className="text-ink-3">{label}</span>
-      <span className={cn("font-mono tabular-nums", valueClass ?? "text-ink")}>{value}</span>
+      <span className={cn("font-mono tabular-nums font-semibold", valueClass ?? "text-ink")}>{value}</span>
     </div>
   );
 }
@@ -706,6 +829,7 @@ export function OrderDetailPanel({
   userPermissions = [],
   className,
 }: OrderDetailPanelProps) {
+  const { role } = useRole();
   const [authMode, setAuthMode] = useState<"approve" | "reject" | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -734,13 +858,24 @@ export function OrderDetailPanel({
     );
   }
 
-  const tone = STATUS_TONE[order.status] ?? "ink";
+  // El backend es la fuente de verdad para el estado — mostrar exactamente lo que viene del backend
+  const balance = order.invoiceBalance;
+  const isPaid = balance && balance.outstanding <= 0.01;
+  const statusLabel = STATUS_LABEL[order.status] ?? order.status;
+  const tone = STATUS_TONE[statusLabel] ?? "ink";
+
+  // Determinar qué mostrar basado en el rol del usuario
+  const isVendor = role === "vendor";
+  const displayName = isVendor ? (order.company || "Cliente desconocido") : order.vendor;
+  const displayLabel = isVendor ? "Cliente" : "Proveedor";
+
   const m = fmtCurrency(order.amount, order.cur);
-  const canUploadInvoice = hasAny(userPermissions, ["invoices:create"]);
-  const canUploadPayment = hasAny(userPermissions, ["orders:update", "payments:create"]);
-  const docs = docRowsFor(order, { canUploadInvoice, canUploadPayment });
+  const canUploadInvoice = hasAny(userPermissions, ["invoices:upload", "invoices:create"]);
+  const canUploadPayment = hasAny(userPermissions, ["payments:create"]);
+  const canUploadCreditNote = hasAny(userPermissions, ["credit_notes:upload"]);
+  const docs = docRowsFor(order, { canUploadInvoice, canUploadPayment, canUploadCreditNote });
   const headerRef = order.folio || order.id;
-  const pendingAuth = order.status === "Creada";
+  const pendingAuth = order.status === "creada";
   const canAuthorize = hasAny(userPermissions, ["orders:authorize"]);
   const canSend = hasAny(userPermissions, ["orders:send", "orders:create"]);
   const canDelete = hasAny(userPermissions, ["orders:delete"]);
@@ -758,16 +893,16 @@ export function OrderDetailPanel({
         className,
       )}
     >
-      <div className="p-5 border-b border-line min-w-0">
+      <div className="p-3 border-b border-line min-w-0">
         <div className="flex items-center justify-between gap-2 min-w-0">
           <span
-            className="font-mono text-[11px] text-ink-3 uppercase tracking-wider truncate min-w-0"
+            className="font-mono text-[9px] text-ink-3 uppercase tracking-wider truncate min-w-0"
             title={headerRef}
           >
             {headerRef}
           </span>
           <div className="flex items-center gap-1.5 shrink-0">
-            <Badge tone={tone}>{order.status}</Badge>
+            <Badge tone={tone}>{statusLabel}</Badge>
             {canDelete && (
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
@@ -804,16 +939,53 @@ export function OrderDetailPanel({
           </div>
         </div>
         <h3
-          className="mt-2 font-display text-[20px] font-medium leading-tight truncate"
-          title={order.vendor}
+          className="mt-1.5 font-display text-[16px] font-semibold leading-tight truncate"
+          title={displayName}
         >
-          {order.vendor}
+          {displayName}
         </h3>
-        <div className="mt-1 text-[11.5px] text-ink-3 font-mono truncate">
-          {order.items} líneas · emitida {fmtDate(order.date)} · vence{" "}
-          {fmtDate(order.due)}
+        <div className="mt-1.5 text-[10px] text-ink-3 space-y-0.5">
+          <div className="flex items-center gap-1.5">
+            <Icon name="file" size={10} />
+            <span>{order.items} líneas</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Icon name="calendar" size={10} />
+            <span>Emitida {fmtDate(order.date)}</span>
+          </div>
+          {order.paymentMethod && (
+            <div className="flex items-center gap-1.5">
+              <Icon name="coin" size={10} />
+              <span>Cond: <span className="font-mono font-semibold">{order.paymentMethod}</span></span>
+            </div>
+          )}
         </div>
-        {pendingAuth ? (
+
+        {/* Botones de autorización */}
+        {pendingAuth && canAuthorize && backend ? (
+          <div className="mt-3 flex gap-2">
+            <Button
+              variant="clay"
+              size="sm"
+              className="flex-1 justify-center"
+              onClick={() => setAuthMode("approve")}
+            >
+              <Icon name="check" size={13} />
+              Autorizar
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 justify-center"
+              onClick={() => setAuthMode("reject")}
+            >
+              <Icon name="x" size={13} />
+              Rechazar
+            </Button>
+          </div>
+        ) : null}
+
+        {pendingAuth && !canAuthorize ? (
           <div className="mt-3 flex items-center gap-1.5 rounded-md border border-line bg-paper-2 px-2.5 py-1.5">
             <Icon name="warn" size={12} className="text-rust-700" />
             <span className="text-[11px] font-medium text-rust-700">
@@ -823,36 +995,168 @@ export function OrderDetailPanel({
         ) : null}
       </div>
 
-      <div className="p-5 border-b border-line">
-        <div className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3 mb-1">
-          Importe
-        </div>
-        <div className="ff-stat-val ff-num">
-          <span className="text-[18px] italic font-normal text-ink-3 mr-1">
-            {m.symbol}
-          </span>
-          {m.integer}
-          <span className="text-ink-3 text-[20px]">.{m.decimal}</span>
-          <span className="ml-1.5 text-[12px] font-mono text-ink-3 align-baseline">
-            {m.code}
-          </span>
+      <div className="p-3 border-b border-line">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-1">
+              Importe Total
+            </div>
+            <div className="ff-stat-val ff-num">
+              <span className="text-[14px] italic font-normal text-ink-3 mr-0.5">
+                {m.symbol}
+              </span>
+              <span className="text-[18px]">{m.integer}</span>
+              <span className="text-ink-3 text-[16px]">.{m.decimal}</span>
+              <span className="ml-1 text-[10px] font-mono text-ink-3 align-baseline">
+                {m.code}
+              </span>
+            </div>
+          </div>
+          <div>
+            <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-1">
+              Saldo
+            </div>
+            <div className="ff-stat-val ff-num">
+              {(() => {
+                const saldoAmount = backend?.balance ?? order.amount;
+                const s = fmtCurrency(saldoAmount, order.cur);
+                const isPaid = saldoAmount <= 0.01;
+                return (
+                  <>
+                    <span className={cn("text-[14px] italic font-normal mr-0.5", isPaid ? "text-green-600" : "text-orange-600")}>
+                      {s.symbol}
+                    </span>
+                    <span className={cn("text-[18px]", isPaid ? "text-green-600" : "text-orange-600")}>
+                      {s.integer}
+                    </span>
+                    <span className={cn("text-[16px]", isPaid ? "text-green-600" : "text-orange-600")}>
+                      .{s.decimal}
+                    </span>
+                    <span className={cn("ml-1 text-[10px] font-mono align-baseline", isPaid ? "text-green-600" : "text-orange-600")}>
+                      {s.code}
+                    </span>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
         </div>
       </div>
 
       {order.invoiceBalance ? (
-        <div className="p-5 border-b border-line">
-          <div className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3 mb-3">
+        <div className="p-3 border-b border-line">
+          <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-2">
             Resumen de pago
           </div>
           <PaymentSummary balance={order.invoiceBalance} currency={order.cur} />
         </div>
       ) : null}
 
-      <div className="p-5 border-b border-line">
-        <div className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3 mb-3">
+      {/* Detalles de la orden - SIEMPRE VISIBLE */}
+      <div className="p-3 border-b border-line bg-paper-2">
+        <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-2">
+          Detalles
+        </div>
+        <div className="space-y-1.5 text-[10px]">
+          <div className="flex items-center justify-between">
+            <span className="text-ink-3">{displayLabel}</span>
+            <span className="font-semibold text-ink text-right max-w-[60%] truncate" title={displayName}>{displayName}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-ink-3">Líneas de producto</span>
+            <span className="font-mono font-semibold text-ink">{order.items}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-ink-3">Moneda</span>
+            <span className="font-mono font-semibold text-ink">{order.cur}</span>
+          </div>
+          {order.paymentMethod && (
+            <div className="flex items-center justify-between">
+              <span className="text-ink-3">Condición de pago</span>
+              <span className="font-mono font-semibold text-ink bg-ink-5 px-2 py-1 rounded">{order.paymentMethod}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="text-ink-3">Fecha de emisión</span>
+            <span className="font-semibold text-ink">{fmtDate(order.date)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-ink-3">Fecha de vencimiento</span>
+            <div className="text-right">
+              <div className="font-semibold text-ink">{fmtDate(order.due)}</div>
+              {new Date(order.due) < new Date() && order.status !== "pagada" && order.status !== "cerrado" && (
+                <div className="text-[10px] text-rust font-semibold mt-0.5 flex items-center gap-1 justify-end">
+                  <Icon name="warn" size={10} />
+                  Vencida
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Información adicional del proveedor */}
+      {vendorContact && (vendorContact.vendorLegalName || vendorContact.rfc || vendorContact.email || vendorContact.phone) && (
+        <div className="p-3 border-b border-line">
+          <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-2">
+            Info proveedor
+          </div>
+          <div className="space-y-1.5 text-[10px]">
+            {vendorContact.vendorLegalName && (
+              <div>
+                <div className="text-[8px] text-ink-4 uppercase tracking-wide">Razón social</div>
+                <div className="text-ink font-semibold text-[10px] mt-0.5">{vendorContact.vendorLegalName}</div>
+              </div>
+            )}
+            {vendorContact.rfc && (
+              <div>
+                <div className="text-[8px] text-ink-4 uppercase tracking-wide">RFC</div>
+                <div className="text-ink font-mono font-semibold text-[10px] mt-0.5">{vendorContact.rfc}</div>
+              </div>
+            )}
+            {vendorContact.email && (
+              <div>
+                <div className="text-[8px] text-ink-4 uppercase tracking-wide">Email</div>
+                <div className="text-ink break-all text-[9px] mt-0.5">{vendorContact.email}</div>
+              </div>
+            )}
+            {vendorContact.phone && (
+              <div>
+                <div className="text-[8px] text-ink-4 uppercase tracking-wide">Teléfono</div>
+                <div className="text-ink font-mono text-[10px] mt-0.5">{vendorContact.phone}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Complementos de pago (REP) */}
+      {(order.paymentComplementsCount ?? 0) > 0 && (
+        <div className="p-3 border-b border-line">
+          <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-2">
+            Complementos (REP)
+          </div>
+          <div className="flex items-center gap-2 bg-moss-soft border border-moss/20 rounded px-2 py-1.5">
+            <Icon name="check" size={12} className="text-moss shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] font-semibold text-moss-deep">
+                {order.paymentComplementsCount} REP
+              </div>
+              {order.paymentComplementFirstFolio && (
+                <div className="text-[8px] text-moss-deep/70 mt-0.5 font-mono truncate">
+                  {order.paymentComplementFirstFolio}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="p-3 border-b border-line">
+        <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-2">
           Documentos
         </div>
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {docs.map((d) => (
             <DocRow
               key={d.type}
@@ -863,10 +1167,47 @@ export function OrderDetailPanel({
             />
           ))}
         </div>
+        <div className="mt-2 pt-2 border-t border-line">
+          <div className="text-[9px] text-ink-3">
+            <div className="flex items-center justify-between">
+              <span>Total:</span>
+              <span className="font-mono font-semibold text-ink">{docs.filter(d => d.state === 'ok').length}/{docs.length}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div className="p-5 border-b border-line">
-        <div className="font-mono text-[10.5px] uppercase tracking-wider text-ink-3 mb-3">
+      {/* Fechas importantes */}
+      <div className="p-3 border-b border-line">
+        <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-2">
+          Fechas
+        </div>
+        <div className="space-y-1.5 text-[10px]">
+          <div className="flex items-start gap-2">
+            <Icon name="calendar" size={11} className="text-ink-3 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <div className="text-ink-4 text-[8px]">Emisión</div>
+              <div className="text-ink font-semibold">{fmtDate(order.date)}</div>
+            </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <Icon name="clock" size={11} className="text-ink-3 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <div className="text-ink-4 text-[8px]">Vencimiento</div>
+              <div className="text-ink font-semibold">{fmtDate(order.due)}</div>
+              {new Date(order.due) < new Date() && order.status !== "pagada" && order.status !== "cerrado" && (
+                <div className="text-[9px] text-rust font-semibold mt-1 flex items-center gap-1 bg-rust-soft px-1.5 py-0.5 rounded">
+                  <Icon name="warn" size={9} />
+                  Vencida
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-3 border-b border-line">
+        <div className="font-mono text-[9px] uppercase tracking-wider text-ink-3 mb-2">
           Historial
         </div>
         {order.history && order.history.length > 0 ? (
@@ -896,35 +1237,6 @@ export function OrderDetailPanel({
       </div>
 
       <div className="p-5 flex flex-col gap-2">
-        {pendingAuth && canAuthorize && backend ? (
-          <div className="flex gap-2">
-            <Button
-              variant="clay"
-              size="sm"
-              className="flex-1 justify-center"
-              onClick={() => setAuthMode("approve")}
-            >
-              <Icon name="check" size={13} />
-              Autorizar
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1 justify-center"
-              onClick={() => setAuthMode("reject")}
-            >
-              <Icon name="x" size={13} />
-              Rechazar
-            </Button>
-          </div>
-        ) : null}
-
-        {pendingAuth && !canAuthorize ? (
-          <div className="text-[11px] text-ink-3 text-center">
-            Esperando autorización de un Super Admin
-          </div>
-        ) : null}
-
         {canSend && backend ? (
           <Button
             variant={sendable ? "clay" : "outline"}
@@ -953,12 +1265,6 @@ export function OrderDetailPanel({
             OC (PDF)
           </a>
         </Button>
-        <Button variant="ghost" size="sm" className="w-full justify-center" asChild>
-          <Link to={`/payments/new?order=${order.id}`}>
-            <Icon name="coin" size={13} />
-            Registrar pago
-          </Link>
-        </Button>
       </div>
 
       {backend ? (
@@ -970,6 +1276,10 @@ export function OrderDetailPanel({
               if (!open) setAuthMode(null);
             }}
             mode={authMode ?? "approve"}
+            onSuccess={() => {
+              // Revalidar los datos de la orden para actualizar el estado
+              revalidator.revalidate();
+            }}
           />
           <SendOrderDialog
             open={sendOpen}

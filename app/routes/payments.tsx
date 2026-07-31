@@ -3,31 +3,25 @@ import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/cloudflare";
 import { json } from "@remix-run/cloudflare";
 import { useLoaderData } from "@remix-run/react";
 
-import { requireUser } from "~/lib/session.server";
+import { requireUser, getFullSession } from "~/lib/session.server";
 import { useUser } from "~/lib/auth-context";
 import { useRole } from "~/lib/role-context";
 import { cn } from "~/lib/utils";
 import {
-  fmtCurrency,
-  fmtDate,
-  STATUS_TONE,
-  type SamplePayment,
-} from "~/lib/sample-data";
+  fetchPayments,
+  fetchActiveVendors,
+  fetchOrder,
+  type PaymentBackend,
+  type ActiveVendorSummary,
+  type OrderBackend,
+} from "~/lib/procurement-api.server";
 
 import { AuthLayout } from "~/components/layout/auth-layout";
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card } from "~/components/ui/card";
 import { Icon } from "~/components/ui/icon";
 import { StatCard } from "~/components/ui/stat-card";
 import { Toolbar } from "~/components/ui/toolbar";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-  TabsCount,
-} from "~/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -53,104 +47,153 @@ export const handle = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  // Backend is ready (`be-v2/src/api/payments.rs`). To swap from sample data
-  // see `procurement-api.server.ts#fetchPayments`.
-  await requireUser(request);
-  const payments: SamplePayment[] = [];
-  return json({ payments });
+  const user = await requireUser(request);
+  const session = await getFullSession(request);
+  if (!session?.accessToken || !user.company) {
+    return json({
+      payments: [] as PaymentBackend[],
+      vendors: [] as ActiveVendorSummary[],
+      orders: {} as Record<string, OrderBackend>,
+    });
+  }
+  const [paymentsResponse, vendors] = await Promise.all([
+    fetchPayments(session.accessToken, user.company, {
+      limit: 100,
+    }).catch((e: unknown) => {
+      console.warn("[payments] fetchPayments failed:", e);
+      return { data: [] as PaymentBackend[], count: 0, nextCursor: null };
+    }),
+    fetchActiveVendors(session.accessToken, user.company).catch((e: unknown) => {
+      console.warn("[payments] fetchActiveVendors failed:", e);
+      return [] as ActiveVendorSummary[];
+    }),
+  ]);
+
+  // Cargar solo órdenes asociadas a los pagos (las facturas ya vienen enriquecidas en allocations)
+  const orderIds = new Set<string>();
+
+  for (const payment of paymentsResponse.data) {
+    if (payment.orderId) {
+      orderIds.add(payment.orderId);
+    }
+  }
+
+  const companyId = user.company;
+  const orders = await Promise.all(
+    Array.from(orderIds).map(id =>
+      fetchOrder(session.accessToken, companyId, id).catch(() => null)
+    )
+  );
+
+  const orderMap: Record<string, OrderBackend> = {};
+  orders.filter(Boolean).forEach(ord => {
+    if (ord) orderMap[ord.id] = ord;
+  });
+
+  return json({
+    payments: paymentsResponse.data,
+    vendors,
+    orders: orderMap,
+  });
 }
 
-type StatusFilter =
-  | "all"
-  | "scheduled"
-  | "pending"
-  | "confirmed"
-  | "rejected";
-
-const FILTERS: { value: StatusFilter; label: string }[] = [
-  { value: "all", label: "Todos" },
-  { value: "scheduled", label: "Programados" },
-  { value: "pending", label: "Pendientes conf." },
-  { value: "confirmed", label: "Confirmados" },
-  { value: "rejected", label: "Rechazados" },
-];
-
-function matches(p: SamplePayment, f: StatusFilter): boolean {
-  switch (f) {
-    case "all":
-      return true;
-    case "scheduled":
-      return p.status === "Programado";
-    case "pending":
-      return p.status === "Pendiente conf.";
-    case "confirmed":
-      return p.status === "Confirmado";
-    case "rejected":
-      return p.status === "Rechazado";
+function formatMethod(method: PaymentBackend["method"]): string {
+  switch (method) {
+    case "transferencia_spei":
+      return "Transferencia SPEI";
+    case "wire_usd":
+      return "Wire USD";
+    case "sepa":
+      return "SEPA";
+    case "cheque_mxn":
+      return "Cheque MXN";
   }
 }
 
+function fmtDate(iso: string): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return "—";
+  const day = date.getDate();
+  const month = date.toLocaleDateString("es-MX", { month: "short" }).replace(".", "");
+  const year = date.getFullYear().toString().slice(-2);
+  return `${day} ${month} ${year}`;
+}
+
+function fmtMoney(amount: number, currency: string): string {
+  return `$${amount.toLocaleString("es-MX", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} ${currency}`;
+}
+
+function vendorName(vendors: ActiveVendorSummary[], id: string): string {
+  const vendor = vendors.find((v) => v.id === id);
+  return vendor?.vendorLegalName || vendor?.name || id.slice(0, 8);
+}
+
 export default function PaymentsPage() {
-  const { payments } = useLoaderData<typeof loader>();
+  const { payments, vendors, orders } = useLoaderData<typeof loader>();
   const { user } = useUser();
   const { role } = useRole();
 
   const [search, setSearch] = useState("");
-  const [methodFilter, setMethodFilter] = useState<string>("all");
   const [currencyFilter, setCurrencyFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(payments[0]?.id ?? null);
-
-  const counts = useMemo(() => {
-    const c: Record<StatusFilter, number> = {
-      all: 0,
-      scheduled: 0,
-      pending: 0,
-      confirmed: 0,
-      rejected: 0,
-    };
-    for (const p of payments) {
-      c.all++;
-      if (matches(p, "scheduled")) c.scheduled++;
-      if (matches(p, "pending")) c.pending++;
-      if (matches(p, "confirmed")) c.confirmed++;
-      if (matches(p, "rejected")) c.rejected++;
-    }
-    return c;
-  }, [payments]);
-
-  const methods = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of payments) set.add(p.method);
-    return Array.from(set);
-  }, [payments]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return payments.filter((p) => {
-      if (!matches(p, statusFilter)) return false;
-      if (methodFilter !== "all" && p.method !== methodFilter) return false;
-      if (currencyFilter !== "all" && p.cur !== currencyFilter) return false;
-      if (
-        q &&
-        !p.id.toLowerCase().includes(q) &&
-        !p.vendor.toLowerCase().includes(q) &&
-        !p.inv.toLowerCase().includes(q)
-      )
-        return false;
+      if (currencyFilter !== "all" && p.currency !== currencyFilter) return false;
+      if (q) {
+        const vname = vendorName(vendors, p.vendor).toLowerCase();
+        const order = p.orderId ? orders[p.orderId] : null;
+        const orderFolio = order?.folio?.toLowerCase() || "";
+
+        // Buscar en proveedor, orden, o facturas (usando datos enriquecidos)
+        const hasMatch = vname.includes(q) ||
+                        orderFolio.includes(q) ||
+                        p.allocations.some(alloc =>
+                          alloc.invoiceFolio.toLowerCase().includes(q) ||
+                          alloc.invoiceUuidAbbrev.toLowerCase().includes(q)
+                        );
+
+        if (!hasMatch) return false;
+      }
       return true;
     });
-  }, [payments, statusFilter, methodFilter, currencyFilter, search]);
+  }, [payments, vendors, orders, currencyFilter, search]);
 
 
-  // KPI computations
-  const weekToBay = payments
-    .filter((p) => p.status === "Programado" || p.status === "Pendiente conf.")
-    .reduce((acc, p) => acc + p.amount, 0);
-  const paidThisMonth = payments
-    .filter((p) => p.status === "Confirmado")
-    .reduce((acc, p) => acc + p.amount, 0);
-  const pendingCount = payments.filter((p) => p.status === "Pendiente conf.").length;
+  // KPI computations - Separados por moneda
+  const paymentsCount = payments.length;
+
+  // Calcular totales por moneda
+  const totalsByCurrency = payments.reduce((acc, p) => {
+    acc[p.currency] = (acc[p.currency] || 0) + p.amount;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Calcular saldo pendiente por moneda
+  const pendingByCurrency = payments.reduce((acc, p) => {
+    p.allocations.forEach(alloc => {
+      const currency = alloc.invoiceCurrency;
+      acc[currency] = (acc[currency] || 0) + alloc.invoiceBalance;
+    });
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Calcular pagos del mes actual por moneda
+  const currentMonth = new Date().getMonth();
+  const currentYear = new Date().getFullYear();
+  const paymentsThisMonth = payments.filter(p => {
+    const paymentDate = new Date(p.date);
+    return paymentDate.getMonth() === currentMonth && paymentDate.getFullYear() === currentYear;
+  });
+  const thisMonthByCurrency = paymentsThisMonth.reduce((acc, p) => {
+    acc[p.currency] = (acc[p.currency] || 0) + p.amount;
+    return acc;
+  }, {} as Record<string, number>);
 
   const isVendor = role === "vendor";
 
@@ -160,79 +203,81 @@ export default function PaymentsPage() {
         <header className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="ff-page-title">
-              Pagos a <em>proveedores</em>
+              Tesorería · <em>Pagos</em>
             </h1>
             <p className="ff-page-sub">
               {isVendor
-                ? "Confirma pagos recibidos y revisa comprobantes"
-                : `${user?.companyName ?? "Tu empresa"} · ${counts.pending} pagos por confirmar`}
+                ? "Comprobantes de pago recibidos"
+                : `Gestión de pagos a proveedores`}
             </p>
           </div>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <StatCard
-            label="A pagar esta semana"
-            currency="$"
-            value={
-              <>
-                {weekToBay.toLocaleString("es-MX", { minimumFractionDigits: 0 })}
-                <span className="ff-stat-val text-ink-3 text-[20px] font-normal">
-                  .00
-                </span>
-              </>
-            }
-            delta={{
-              label: `${counts.scheduled + counts.pending} pagos · ${
-                new Set(
-                  payments
-                    .filter((p) => matches(p, "scheduled") || matches(p, "pending"))
-                    .map((p) => p.vendor),
-                ).size
-              } proveedores`,
-            }}
-          />
-          <StatCard
-            label="Pagado (mes)"
-            currency="$"
-            value={
-              <>
-                {paidThisMonth.toLocaleString("es-MX", { minimumFractionDigits: 0 })}
-                <span className="ff-stat-val text-ink-3 text-[20px] font-normal">
-                  .00
-                </span>
-              </>
-            }
-            delta={{ label: `${counts.confirmed} pagos confirmados`, direction: "up" }}
-            sparkPath="M0 22 L10 18 L20 14 L30 16 L40 8 L50 12 L60 6 L70 10 L80 4"
-            sparkTone="moss"
-          />
-          <StatCard
-            label="Pendientes conf."
-            value={String(pendingCount)}
-            delta={{ label: "Esperando confirmación del proveedor" }}
-          />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+          <div className="ff-stat">
+            <div className="ff-stat-label">Total Pagado</div>
+            <div className="space-y-1 mt-2">
+              {Object.entries(totalsByCurrency).map(([currency, amount]) => (
+                <div key={currency} className="flex items-baseline gap-1.5">
+                  <span className="text-[11px] font-mono text-ink-3 w-10">{currency}</span>
+                  <span className="font-display text-[20px] font-medium ff-num">
+                    ${amount.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-1.5 inline-flex items-center gap-1 font-mono text-[10.5px] text-ink-3">
+              · {paymentsCount} pagos registrados
+            </div>
+          </div>
+
+          <div className="ff-stat">
+            <div className="ff-stat-label">Saldo Pendiente</div>
+            <div className="space-y-1 mt-2">
+              {Object.entries(pendingByCurrency).map(([currency, amount]) => (
+                <div key={currency} className="flex items-baseline gap-1.5">
+                  <span className="text-[11px] font-mono text-ink-3 w-10">{currency}</span>
+                  <span className="font-display text-[20px] font-medium ff-num">
+                    ${amount.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-1.5 inline-flex items-center gap-1 font-mono text-[10.5px] text-ink-3">
+              · Por pagar en facturas
+            </div>
+          </div>
+
+          <div className="ff-stat">
+            <div className="ff-stat-label">Este Mes</div>
+            <div className="space-y-1 mt-2">
+              {Object.entries(thisMonthByCurrency).length > 0 ? (
+                Object.entries(thisMonthByCurrency).map(([currency, amount]) => (
+                  <div key={currency} className="flex items-baseline gap-1.5">
+                    <span className="text-[11px] font-mono text-ink-3 w-10">{currency}</span>
+                    <span className="font-display text-[20px] font-medium ff-num">
+                      ${amount.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="font-display text-[20px] font-medium text-ink-3">
+                  Sin pagos
+                </div>
+              )}
+            </div>
+            <div className="mt-1.5 inline-flex items-center gap-1 font-mono text-[10.5px] text-ink-3">
+              · {paymentsThisMonth.length} pagos
+            </div>
+          </div>
         </div>
 
         <Toolbar>
           <Toolbar.Search
             value={search}
             onChange={setSearch}
-            placeholder="Folio, proveedor, factura…"
+            placeholder="Proveedor, orden, factura…"
           />
-          <Select value={methodFilter} onValueChange={setMethodFilter}>
-            <SelectTrigger className="w-[200px] h-9">
-              <SelectValue placeholder="Método" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todos los métodos</SelectItem>
-              {methods.map((m) => (
-                <SelectItem key={m} value={m}>
-                  {m}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
           <Select value={currencyFilter} onValueChange={setCurrencyFilter}>
             <SelectTrigger className="w-[130px] h-9">
               <SelectValue placeholder="Moneda" />
@@ -254,39 +299,24 @@ export default function PaymentsPage() {
           </Toolbar.Summary>
         </Toolbar>
 
-        <Tabs
-          value={statusFilter}
-          onValueChange={(v) => setStatusFilter(v as StatusFilter)}
-        >
-          <TabsList>
-            {FILTERS.map((f) => (
-              <TabsTrigger key={f.value} value={f.value}>
-                {f.label}
-                <TabsCount>{counts[f.value]}</TabsCount>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-
-          <TabsContent value={statusFilter} className="mt-4 space-y-4">
-            <Card>
+        <Card>
               <div className="overflow-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Folio</TableHead>
                       <TableHead>Proveedor</TableHead>
-                      <TableHead>Factura</TableHead>
-                      <TableHead>Fecha</TableHead>
-                      <TableHead>Método</TableHead>
-                      <TableHead>Parcial</TableHead>
-                      <TableHead className="text-right">Importe</TableHead>
-                      <TableHead>Estado</TableHead>
+                      <TableHead>Orden</TableHead>
+                      <TableHead>Facturas</TableHead>
+                      <TableHead>Fecha Factura</TableHead>
+                      <TableHead>Fecha Pago</TableHead>
+                      <TableHead className="text-right">Total Factura</TableHead>
+                      <TableHead className="text-right">Total Pago</TableHead>
+                      <TableHead className="text-right">Saldo</TableHead>
+                      <TableHead className="w-[100px]">Acciones</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filtered.map((p) => {
-                      const m = fmtCurrency(p.amount, p.cur);
-                      const tone = STATUS_TONE[p.status] ?? "ink";
                       const active = p.id === selectedId;
                       return (
                         <TableRow
@@ -298,41 +328,84 @@ export default function PaymentsPage() {
                           )}
                           onClick={() => setSelectedId(p.id)}
                         >
-                          <TableCell className="font-mono text-[12px]">
-                            {p.id}
-                          </TableCell>
                           <TableCell className="truncate max-w-[200px]">
-                            {p.vendor}
+                            {vendorName(vendors, p.vendor)}
+                          </TableCell>
+                          <TableCell className="font-mono text-[12px]">
+                            {(p.orderId && orders[p.orderId]?.folio) || "—"}
+                          </TableCell>
+                          <TableCell className="text-[11px] text-ink-2 max-w-[250px]">
+                            {p.allocations.length > 0 ? (
+                              <div className="space-y-0.5">
+                                {p.allocations.map(alloc => (
+                                  <div key={alloc.invoiceId} className="truncate">
+                                    {alloc.invoiceFolio} • {alloc.invoiceUuidAbbrev}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : "—"}
                           </TableCell>
                           <TableCell className="font-mono text-[12px] text-ink-3">
-                            {p.inv}
+                            {p.allocations.length > 0 ? (
+                              <div className="space-y-0.5">
+                                {p.allocations.map(alloc => (
+                                  <div key={alloc.invoiceId}>
+                                    {fmtDate(alloc.invoiceDate)}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : "—"}
                           </TableCell>
                           <TableCell className="font-mono text-[12px] text-ink-3">
                             {fmtDate(p.date)}
                           </TableCell>
-                          <TableCell className="text-[12px]">{p.method}</TableCell>
-                          <TableCell className="font-mono text-[11.5px] text-ink-3">
-                            {p.part}
+                          <TableCell className="text-right">
+                            {p.allocations.length > 0 ? (
+                              <div className="space-y-0.5">
+                                {p.allocations.map(alloc => (
+                                  <div key={alloc.invoiceId} className="font-mono text-[11.5px] text-ink-2">
+                                    {fmtMoney(alloc.invoiceTotal, alloc.invoiceCurrency)}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : "—"}
                           </TableCell>
                           <TableCell className="text-right">
                             <span className="font-mono font-medium">
-                              {m.symbol}
-                              {m.integer}
-                              <span className="text-ink-3">.{m.decimal}</span>
-                            </span>
-                            <span className="ml-1 font-mono text-[10px] text-ink-3">
-                              {m.code}
+                              {fmtMoney(p.amount, p.currency)}
                             </span>
                           </TableCell>
+                          <TableCell className="text-right">
+                            {p.allocations.length > 0 ? (
+                              <div className="space-y-0.5">
+                                {p.allocations.map(alloc => (
+                                  <div key={alloc.invoiceId} className="font-mono text-[11.5px] text-ink-3">
+                                    {fmtMoney(alloc.invoiceBalance, alloc.invoiceCurrency)}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : "—"}
+                          </TableCell>
                           <TableCell>
-                            <Badge tone={tone}>{p.status}</Badge>
+                            {p.receiptUrl && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                asChild
+                              >
+                                <a href={p.receiptUrl} target="_blank" rel="noopener noreferrer">
+                                  <Icon name="eye" size={14} />
+                                  Ver
+                                </a>
+                              </Button>
+                            )}
                           </TableCell>
                         </TableRow>
                       );
                     })}
                     {filtered.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-center py-14">
+                        <TableCell colSpan={9} className="text-center py-14">
                           <Icon
                             name="pay"
                             size={32}
@@ -348,9 +421,6 @@ export default function PaymentsPage() {
                 </Table>
               </div>
             </Card>
-
-          </TabsContent>
-        </Tabs>
       </div>
     </AuthLayout>
   );

@@ -327,7 +327,7 @@ export default function NewOrder() {
                     <SelectContent>
                       {vendors.map((v) => (
                         <SelectItem key={v.id} value={v.id}>
-                          {v.name}
+                          {v.vendorLegalName || v.name}
                           <span className="text-ink-3"> · {v.rfc}</span>
                         </SelectItem>
                       ))}

@@ -281,7 +281,8 @@ function RoleEditor({ role }: { role: RoleBackend }) {
     setPerms(new Set(role.permissions));
   }, [role.id, role.name, role.color, role.permissions]);
 
-  const readOnly = role.isSystemRole;
+  // Only Super Admin role is read-only, other system roles (like Proveedor) can be edited
+  const readOnly = role.name.toLowerCase() === "super admin";
 
   const toggle = (key: string) => {
     if (readOnly) return;

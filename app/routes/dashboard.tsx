@@ -11,6 +11,7 @@ import {
   fetchInvoices,
   fetchAllInvoices,
   fetchPendingBuyerActivation,
+  apiRequest,
   type PendingBuyerActivation,
 } from "~/lib/api.server";
 import { useUser } from "~/lib/auth-context";
@@ -46,6 +47,17 @@ import { DashboardLoadingSkeleton } from "~/components/ui/loading-state";
 import { MultiPaymentDialog } from "~/components/dashboard/multi-payment-dialog";
 
 import type { Invoice, InvoiceBackend } from "~/types";
+
+interface ActivityEvent {
+  sourceId: string;
+  kind: string;
+  ts: string;
+  description: string;
+  action: string;
+  actor?: string | null;
+  entityRef?: string | null;
+  entityType?: string | null;
+}
 
 export const meta: MetaFunction = () => [
   { title: "Panel — FabriFlow" },
@@ -190,12 +202,30 @@ function dayPart(): string {
   return "Buenas noches";
 }
 
-// Inferred document presence — pre-Phase-3 there's no Order entity, so we
-// estimate doc state from the invoice's URLs.
+// Inferred document presence from invoice keys
 function inferDocs(inv: InvoiceBackend): DocType[] {
   const docs: DocType[] = [];
-  if (inv.ordenCompraUrl) docs.push("OC");
-  if (inv.xmlUrl || inv.pdfUrl) docs.push("FAC");
+
+  // Si la factura está vinculada a una orden de compra, siempre hay OC
+  if (inv.purchaseOrder || inv.ordenCompraKey || inv.ordenCompraUrl) {
+    docs.push("OC");
+  }
+
+  // Si hay factura vinculada a una orden, asumir que también hay REM
+  if (inv.purchaseOrder) {
+    docs.push("REM");
+  }
+
+  // La factura (XML/PDF) siempre está presente si existe el registro
+  if (inv.pdfKey || inv.xmlKey || inv.pdfUrl || inv.xmlUrl) {
+    docs.push("FAC");
+  }
+
+  // Si el estado es "pagada" o "completada", mostrar ícono de pago
+  if (inv.estado === "pagada" || inv.estado === "completada") {
+    docs.push("PAGO");
+  }
+
   return docs;
 }
 
@@ -231,6 +261,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let dpo = 0;
   let porcentajePagadoATiempo = 0;
   let topProveedores: Array<{ nombre: string; monto: number; facturas: number }> = [];
+  let activity: ActivityEvent[] = [];
 
   let errorMsg: string | null = null;
   let pendingBuyerActivation: PendingBuyerActivation | null = null;
@@ -336,6 +367,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
         .sort((a, b) => b.monto - a.monto)
         .slice(0, 5);
     }
+
+    // Obtener actividad reciente (últimos 10 eventos)
+    if (token && companyId) {
+      try {
+        activity = await apiRequest<ActivityEvent[]>(
+          "/api/activity?limit=10",
+          {
+            method: "GET",
+            headers: { "X-Company-Id": companyId },
+          },
+          token
+        );
+      } catch (activityError) {
+        console.error("Error loading activity:", activityError);
+        // No bloqueamos el dashboard si falla activity
+      }
+    }
   } catch (e) {
     console.error("Dashboard loader error:", e);
     errorMsg = "Error al cargar los datos del panel.";
@@ -370,6 +418,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
     recentInvoices,
     aging,
+    activity,
   });
 }
 
@@ -473,7 +522,7 @@ function DashboardBody({ data }: DashboardBodyProps) {
         />
         <div className="flex flex-col gap-4">
           <AgingCard buckets={data.aging} />
-          <ActivityCard isVendor={showVendorView} />
+          <ActivityCard isVendor={showVendorView} activity={data.activity || []} />
         </div>
       </div>
 
@@ -603,7 +652,7 @@ function FactoryKpis({ metrics }: { metrics: FactoryMetrics }) {
           label: metrics.facturasVencidas > 0
             ? `${vencido.symbol}${vencido.integer}.${vencido.decimal} adeudado`
             : "✓ Sin facturas vencidas",
-          direction: metrics.facturasVencidas > 0 ? "down" : "up",
+          direction: metrics.facturasVencidas > 0 ? "dn" : "up",
         }}
       />
 
@@ -626,7 +675,7 @@ function FactoryKpis({ metrics }: { metrics: FactoryMetrics }) {
           label: metrics.dpo > 0
             ? `Días promedio de pago`
             : "Sin datos históricos",
-          direction: metrics.dpo > 45 ? "up" : metrics.dpo > 30 ? "neutral" : metrics.dpo > 0 ? "down" : undefined,
+          direction: metrics.dpo > 45 ? "up" : metrics.dpo > 30 ? "flat" : metrics.dpo > 0 ? "dn" : undefined,
         }}
       />
 
@@ -640,7 +689,7 @@ function FactoryKpis({ metrics }: { metrics: FactoryMetrics }) {
             : metrics.porcentajePagadoATiempo >= 60
             ? "Cumplimiento aceptable"
             : "Requiere atención",
-          direction: metrics.porcentajePagadoATiempo >= 80 ? "up" : metrics.porcentajePagadoATiempo >= 60 ? "neutral" : "down",
+          direction: metrics.porcentajePagadoATiempo >= 80 ? "up" : metrics.porcentajePagadoATiempo >= 60 ? "flat" : "dn",
         }}
       />
     </div>
@@ -822,72 +871,45 @@ function TopProveedoresCard({
   );
 }
 
-function ActivityCard({ isVendor }: { isVendor: boolean }) {
-  // TODO(phase-3): wire to GET /api/activity (audit_log + business events).
-  // Static seed for Phase 2 to demonstrate the UI shape.
-  const items = isVendor
-    ? [
-        {
-          tone: "moss" as const,
-          body: (
-            <>
-              Pago confirmado a tu favor en{" "}
-              <span className="font-mono">PG-2026-0318</span>
-            </>
-          ),
-          meta: "hoy 09:24",
-        },
-        {
-          tone: "clay" as const,
-          body: <>Nueva orden recibida — revisa los términos</>,
-          meta: "hoy 08:51",
-        },
-        {
-          tone: "ink" as const,
-          body: <>Recordatorio: factura próxima a vencer en 3 días</>,
-          meta: "ayer",
-        },
-      ]
-    : [
-        {
-          tone: "wine" as const,
-          body: (
-            <>
-              3 facturas vencidas requieren atención inmediata
-            </>
-          ),
-          meta: "hoy · Urgente",
-        },
-        {
-          tone: "rust" as const,
-          body: (
-            <>
-              Factura <span className="font-mono">FAC-00421</span> próxima a vencer (5 días)
-            </>
-          ),
-          meta: "hoy 11:15",
-        },
-        {
-          tone: "moss" as const,
-          body: (
-            <>
-              Nueva factura validada de Proveedor XYZ{" "}
-              <span className="font-mono">$45,230.00</span>
-            </>
-          ),
-          meta: "hoy 10:02 · CFDI OK",
-        },
-        {
-          tone: "clay" as const,
-          body: <>Sistema procesó pago automático PG-00158</>,
-          meta: "hoy 09:24",
-        },
-        {
-          tone: "ink" as const,
-          body: <>Proveedor ABC subió factura FAC-00422</>,
-          meta: "ayer 17:02",
-        },
-      ];
+function ActivityCard({ isVendor, activity }: { isVendor: boolean; activity: ActivityEvent[] }) {
+  // Mapear eventos reales a formato de UI
+  const items = activity.map((event) => {
+    // Determinar el tono según el tipo de acción
+    let tone: "moss" | "clay" | "rust" | "wine" | "ink" = "ink";
+    if (event.action.includes("payment") || event.action.includes("confirm")) {
+      tone = "moss";
+    } else if (event.action.includes("create") || event.action.includes("upload")) {
+      tone = "clay";
+    } else if (event.action.includes("reject") || event.action.includes("delete")) {
+      tone = "wine";
+    } else if (event.action.includes("approve")) {
+      tone = "moss";
+    }
+
+    // Formatear timestamp a algo más legible
+    const formatTime = (ts: string) => {
+      try {
+        const date = new Date(ts);
+        const now = new Date();
+        const diff = now.getTime() - date.getTime();
+        const hours = Math.floor(diff / (1000 * 60 * 60));
+        const days = Math.floor(hours / 24);
+
+        if (days > 1) return `hace ${days} días`;
+        if (days === 1) return "ayer";
+        if (hours > 0) return `hace ${hours}h`;
+        return "hace poco";
+      } catch {
+        return "";
+      }
+    };
+
+    return {
+      tone,
+      body: event.description || event.action,
+      meta: formatTime(event.ts),
+    };
+  });
 
   return (
     <Card>
@@ -896,13 +918,19 @@ function ActivityCard({ isVendor }: { isVendor: boolean }) {
         <CardDescription>Eventos y alertas del sistema</CardDescription>
       </CardHeader>
       <CardContent>
-        <Timeline>
-          {items.map((it, i) => (
-            <Timeline.Item key={i} tone={it.tone} meta={it.meta}>
-              {it.body}
-            </Timeline.Item>
-          ))}
-        </Timeline>
+        {items.length === 0 ? (
+          <div className="py-8 text-center text-[13px] text-ink-3">
+            Sin actividad reciente
+          </div>
+        ) : (
+          <Timeline>
+            {items.map((it, i) => (
+              <Timeline.Item key={i} tone={it.tone} meta={it.meta}>
+                {it.body}
+              </Timeline.Item>
+            ))}
+          </Timeline>
+        )}
       </CardContent>
     </Card>
   );

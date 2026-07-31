@@ -48,7 +48,7 @@ import {
   requireUser,
   getFullSession,
 } from "~/lib/session.server";
-import { fetchAllInvoices, sendVendorInvite } from "~/lib/api.server";
+import { fetchAllInvoices, sendVendorInvite, deleteVendorByRfc, getVendorDeletionSummary, type VendorDeletionSummary } from "~/lib/api.server";
 import { fetchActiveVendors } from "~/lib/procurement-api.server";
 import type { InvoiceBackend } from "~/types";
 import { DataLoadError } from "~/components/ui/error-state";
@@ -190,21 +190,33 @@ type InviteActionData =
   | { ok: true; shareLink: string; expiresAt: string }
   | { ok: false; error: string };
 
+type DeleteActionData =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
+
+type SummaryActionData =
+  | { ok: true; summary: VendorDeletionSummary }
+  | { ok: false; error: string };
+
+type ActionData = InviteActionData | DeleteActionData | SummaryActionData;
+
 export async function action({
   request,
-}: ActionFunctionArgs): Promise<ReturnType<typeof json<InviteActionData>>> {
+}: ActionFunctionArgs): Promise<ReturnType<typeof json<ActionData>>> {
+  console.log('[ACTION] Action called, method:', request.method);
+
   const user = await requireUser(request);
   const companyId = user.company;
   if (!companyId) {
-    return json<InviteActionData>(
-      { ok: false, error: "Selecciona una empresa antes de invitar proveedores." },
+    return json<ActionData>(
+      { ok: false, error: "Selecciona una empresa antes de continuar." },
       { status: 400 },
     );
   }
 
   const accessToken = await getAccessTokenFromSession(request);
   if (!accessToken) {
-    return json<InviteActionData>(
+    return json<ActionData>(
       { ok: false, error: "Sesión expirada. Vuelve a iniciar sesión." },
       { status: 401 },
     );
@@ -212,29 +224,73 @@ export async function action({
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
-  if (intent !== "invite-vendor") {
-    return json<InviteActionData>({ ok: false, error: "Acción desconocida" }, { status: 400 });
+  console.log('[ACTION] Intent received:', intent);
+
+  // Handle invite vendor
+  if (intent === "invite-vendor") {
+    const email = String(formData.get("email") ?? "").trim();
+    if (!email || !email.includes("@")) {
+      return json<InviteActionData>(
+        { ok: false, error: "Ingresa un correo válido." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const result = await sendVendorInvite(email, accessToken, companyId);
+      return json<InviteActionData>({
+        ok: true,
+        shareLink: result.shareLink,
+        expiresAt: result.expiresAt,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo enviar la invitación.";
+      return json<InviteActionData>({ ok: false, error: message }, { status: 500 });
+    }
   }
 
-  const email = String(formData.get("email") ?? "").trim();
-  if (!email || !email.includes("@")) {
-    return json<InviteActionData>(
-      { ok: false, error: "Ingresa un correo válido." },
-      { status: 400 },
-    );
+  // Handle get vendor summary
+  if (intent === "get-vendor-summary") {
+    const rfc = String(formData.get("rfc") ?? "").trim();
+    if (!rfc) {
+      return json<SummaryActionData>({ ok: false, error: "RFC del proveedor requerido." }, { status: 400 });
+    }
+
+    try {
+      console.log('[VENDORS] Obteniendo resumen para RFC:', rfc);
+      const summary = await getVendorDeletionSummary(rfc, accessToken, companyId);
+      console.log('[VENDORS] Resumen obtenido:', summary);
+      return json<SummaryActionData>({ ok: true, summary });
+    } catch (err) {
+      console.error('[VENDORS] Error obteniendo resumen:', err);
+      const message = err instanceof Error ? err.message : "No se pudo obtener el resumen.";
+      return json<SummaryActionData>({ ok: false, error: message }, { status: 500 });
+    }
   }
 
-  try {
-    const result = await sendVendorInvite(email, accessToken, companyId);
-    return json<InviteActionData>({
-      ok: true,
-      shareLink: result.shareLink,
-      expiresAt: result.expiresAt,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "No se pudo enviar la invitación.";
-    return json<InviteActionData>({ ok: false, error: message }, { status: 500 });
+  // Handle delete vendor
+  if (intent === "delete-vendor") {
+    const rfc = String(formData.get("rfc") ?? "").trim();
+    if (!rfc) {
+      return json<DeleteActionData>(
+        { ok: false, error: "RFC del proveedor requerido." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      await deleteVendorByRfc(rfc, accessToken, companyId);
+      return json<DeleteActionData>({
+        ok: true,
+        message: `Proveedor ${rfc} desactivado exitosamente.`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo desactivar el proveedor.";
+      return json<DeleteActionData>({ ok: false, error: message }, { status: 500 });
+    }
   }
+
+  return json<ActionData>({ ok: false, error: "Acción desconocida" }, { status: 400 });
 }
 
 // ---- helpers ----
@@ -285,6 +341,7 @@ export default function Providers() {
   const { providers, error } = useLoaderData<typeof loader>();
   const revalidator = useRevalidator();
   const [searchParams, setSearchParams] = useSearchParams();
+  const deleteFetcher = useFetcher<DeleteActionData>();
 
   // Filtros
   const [searchFilter, setSearchFilter] = useState(searchParams.get("search") || "");
@@ -296,6 +353,10 @@ export default function Providers() {
 
   // Invite dialog
   const [inviteOpen, setInviteOpen] = useState(false);
+
+  // Delete dialog
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [vendorToDelete, setVendorToDelete] = useState<ProviderSummary | null>(null);
 
   // Aplicar filtros localmente
   const filteredProviders = providers.filter(provider => {
@@ -317,6 +378,22 @@ export default function Providers() {
   }, [setSearchParams]);
 
   const hasActiveFilters = searchFilter || estadoFilter !== "all";
+
+  // Handle successful deletion
+  useEffect(() => {
+    if (deleteFetcher.data && "ok" in deleteFetcher.data && deleteFetcher.data.ok) {
+      setDeleteConfirmOpen(false);
+      setVendorToDelete(null);
+      // Revalidar para actualizar la lista
+      revalidator.revalidate();
+    }
+  }, [deleteFetcher.data, revalidator]);
+
+  const isDeleting = deleteFetcher.state !== "idle";
+  const deleteError =
+    deleteFetcher.data && "ok" in deleteFetcher.data && !deleteFetcher.data.ok
+      ? deleteFetcher.data.error
+      : null;
 
   // Stats
   const totalProveedores = filteredProviders.length;
@@ -452,6 +529,7 @@ export default function Providers() {
                   <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 text-right w-[130px]">Total USD</TableHead>
                   <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 text-center w-[100px]">Pendientes</TableHead>
                   <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 w-[90px]">Última</TableHead>
+                  <TableHead className="h-10 text-[11px] font-semibold uppercase tracking-wider text-ink-3 w-[80px]">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -513,12 +591,27 @@ export default function Providers() {
                           fmtDate(provider.ultimaFactura)
                         )}
                       </TableCell>
+                      <TableCell className="py-2.5">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setVendorToDelete(provider);
+                            setDeleteConfirmOpen(true);
+                          }}
+                          className="h-8 w-8 p-0 text-wine hover:bg-wine-soft hover:text-wine-deep"
+                          title="Desactivar proveedor"
+                        >
+                          <Icon name="trash" size={14} />
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   );
                 })}
                 {filteredProviders.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-16 text-ink-3">
+                    <TableCell colSpan={8} className="text-center py-16 text-ink-3">
                       <Building2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
                       <p className="font-medium text-ink-2">No se encontraron proveedores</p>
                       <p className="text-[12px] mt-1">
@@ -623,7 +716,186 @@ export default function Providers() {
       </Dialog>
 
       <InviteVendorDialog open={inviteOpen} onOpenChange={setInviteOpen} />
+      <DeleteVendorDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        vendor={vendorToDelete}
+        fetcher={deleteFetcher}
+        isDeleting={isDeleting}
+        error={deleteError}
+      />
     </AuthLayout>
+  );
+}
+
+function DeleteVendorDialog({
+  open,
+  onOpenChange,
+  vendor,
+  fetcher,
+  isDeleting,
+  error,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  vendor: ProviderSummary | null;
+  fetcher: ReturnType<typeof useFetcher<DeleteActionData>>;
+  isDeleting: boolean;
+  error: string | null;
+}) {
+  const summaryFetcher = useFetcher<{ ok: boolean; summary?: VendorDeletionSummary; error?: string }>();
+  const [summary, setSummary] = useState<VendorDeletionSummary | null>(null);
+
+  // Obtener resumen detallado cuando se abre el diálogo
+  useEffect(() => {
+    if (open && vendor) {
+      summaryFetcher.submit(
+        { intent: "get-vendor-summary", rfc: vendor.rfc },
+        { method: "post" }
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, vendor]);
+
+  // Actualizar el summary cuando llegue la respuesta
+  useEffect(() => {
+    if (summaryFetcher.data && "ok" in summaryFetcher.data && summaryFetcher.data.ok && summaryFetcher.data.summary) {
+      setSummary(summaryFetcher.data.summary);
+    }
+  }, [summaryFetcher.data]);
+
+  const loadingSummary = summaryFetcher.state !== "idle";
+  const summaryError = summaryFetcher.data && "ok" in summaryFetcher.data && !summaryFetcher.data.ok
+    ? summaryFetcher.data.error
+    : null;
+
+  if (!vendor) return null;
+
+  const handleDelete = () => {
+    fetcher.submit(
+      { intent: "delete-vendor", rfc: vendor.rfc },
+      { method: "post" }
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle className="font-display text-[20px] text-wine">
+            ¿Desactivar proveedor?
+          </DialogTitle>
+          <DialogDescription className="text-[13px] text-ink-3">
+            Esta acción desactivará al proveedor{" "}
+            <strong className="text-ink-1">{vendor.nombre}</strong> (RFC: {vendor.rfc}). Los datos se conservarán para auditoría y podrán ser consultados cuando sea necesario.
+          </DialogDescription>
+        </DialogHeader>
+
+        {loadingSummary ? (
+          <div className="py-8 flex items-center justify-center">
+            <div className="flex items-center gap-3 text-ink-3">
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <span className="text-[13px]">Cargando resumen...</span>
+            </div>
+          </div>
+        ) : summaryError ? (
+          <Alert className="bg-wine-soft border-wine/20">
+            <Icon name="warn" size={14} className="text-wine" />
+            <AlertDescription className="text-[12px] text-wine">
+              {summaryError}
+            </AlertDescription>
+          </Alert>
+        ) : summary ? (
+          <div className="space-y-3 py-2">
+            <Alert className="bg-wine-soft/30 border-wine/20">
+              <Icon name="warn" size={14} className="text-wine" />
+              <AlertDescription className="text-[12px] text-ink-2">
+                <div className="font-semibold mb-2">Se marcarán como inactivos los siguientes datos:</div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="flex justify-between">
+                    <span>Facturas:</span>
+                    <span className="font-mono font-semibold">{summary.facturas}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Órdenes de compra:</span>
+                    <span className="font-mono font-semibold">{summary.ordenesCompra}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Notas de crédito:</span>
+                    <span className="font-mono font-semibold">{summary.notasCredito}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Complementos de pago:</span>
+                    <span className="font-mono font-semibold">{summary.complementosPago}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Vínculos con empresas:</span>
+                    <span className="font-mono font-semibold">{summary.vinculosEmpresas}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Usuarios:</span>
+                    <span className="font-mono font-semibold">{summary.usuarios}</span>
+                  </div>
+                  {summary.invitacionesPendientes > 0 && (
+                    <div className="flex justify-between col-span-2">
+                      <span>Invitaciones pendientes:</span>
+                      <span className="font-mono font-semibold">{summary.invitacionesPendientes}</span>
+                    </div>
+                  )}
+                </div>
+              </AlertDescription>
+            </Alert>
+
+            <Alert className="bg-rust-soft/30 border-rust/20">
+              <Icon name="warn" size={14} className="text-rust-deep" />
+              <AlertDescription className="text-[11px] text-ink-2">
+                <strong>Advertencia:</strong> Esta acción no se puede deshacer. Se registrará en el log de auditoría quién eliminó este proveedor y cuándo.
+              </AlertDescription>
+            </Alert>
+          </div>
+        ) : null}
+
+        {error && (
+          <Alert className="bg-wine-soft border-wine/20">
+            <Icon name="warn" size={14} className="text-wine" />
+            <AlertDescription className="text-[12px] text-wine">
+              {error}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <DialogFooter className="gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={isDeleting}
+            className="h-10"
+          >
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleDelete}
+            disabled={isDeleting || loadingSummary}
+            className="h-10 bg-wine hover:bg-wine-deep"
+          >
+            {isDeleting ? (
+              <>
+                <span className="mr-2 h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                Desactivando…
+              </>
+            ) : (
+              <>
+                <Icon name="trash" size={14} className="mr-2" />
+                Desactivar proveedor
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -7,15 +7,13 @@ import type {
 import { json } from "@remix-run/cloudflare";
 import { useFetcher, useLoaderData } from "@remix-run/react";
 
-import { getAccessTokenFromSession, requireUser } from "~/lib/session.server";
-import { sendVendorInvite } from "~/lib/api.server";
+import { getAccessTokenFromSession, requireUser, getFullSession } from "~/lib/session.server";
+import { sendVendorInvite, deleteVendorByRfc } from "~/lib/api.server";
 import { cn } from "~/lib/utils";
 import {
-  SAMPLE_VENDORS,
-  fmtCurrency,
-  STATUS_TONE,
-  type SampleVendor,
-} from "~/lib/sample-data";
+  fetchActiveVendors,
+  type ActiveVendorSummary,
+} from "~/lib/procurement-api.server";
 
 import { AuthLayout } from "~/components/layout/auth-layout";
 import { Badge } from "~/components/ui/badge";
@@ -67,31 +65,43 @@ export const handle = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  // Backend is ready: list comes from existing `/api/vendors` (companies);
-  // per-vendor scorecard from `procurement-api.server.ts#fetchVendorScorecard`.
   const user = await requireUser(request);
-  return json({ vendors: SAMPLE_VENDORS, companyId: user.company ?? null });
+  const session = await getFullSession(request);
+  if (!session?.accessToken || !user.company) {
+    return json({ vendors: [] as ActiveVendorSummary[], companyId: user.company ?? null });
+  }
+  const vendors = await fetchActiveVendors(session.accessToken, user.company).catch((e: unknown) => {
+    console.warn("[vendors] fetchActiveVendors failed:", e);
+    return [] as ActiveVendorSummary[];
+  });
+  return json({ vendors, companyId: user.company });
 }
 
 type InviteActionData =
   | { ok: true; shareLink: string; expiresAt: string }
   | { ok: false; error: string };
 
+type DeleteActionData =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
+
+type ActionData = InviteActionData | DeleteActionData;
+
 export async function action({
   request,
-}: ActionFunctionArgs): Promise<ReturnType<typeof json<InviteActionData>>> {
+}: ActionFunctionArgs): Promise<ReturnType<typeof json<ActionData>>> {
   const user = await requireUser(request);
   const companyId = user.company;
   if (!companyId) {
-    return json<InviteActionData>(
-      { ok: false, error: "Selecciona una empresa antes de invitar proveedores." },
+    return json<ActionData>(
+      { ok: false, error: "Selecciona una empresa antes de continuar." },
       { status: 400 },
     );
   }
 
   const accessToken = await getAccessTokenFromSession(request);
   if (!accessToken) {
-    return json<InviteActionData>(
+    return json<ActionData>(
       { ok: false, error: "Sesión expirada. Vuelve a iniciar sesión." },
       { status: 401 },
     );
@@ -99,29 +109,53 @@ export async function action({
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
-  if (intent !== "invite-vendor") {
-    return json<InviteActionData>({ ok: false, error: "Acción desconocida" }, { status: 400 });
+
+  // Handle invite vendor
+  if (intent === "invite-vendor") {
+    const email = String(formData.get("email") ?? "").trim();
+    if (!email || !email.includes("@")) {
+      return json<InviteActionData>(
+        { ok: false, error: "Ingresa un correo válido." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const result = await sendVendorInvite(email, accessToken, companyId);
+      return json<InviteActionData>({
+        ok: true,
+        shareLink: result.shareLink,
+        expiresAt: result.expiresAt,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo enviar la invitación.";
+      return json<InviteActionData>({ ok: false, error: message }, { status: 500 });
+    }
   }
 
-  const email = String(formData.get("email") ?? "").trim();
-  if (!email || !email.includes("@")) {
-    return json<InviteActionData>(
-      { ok: false, error: "Ingresa un correo válido." },
-      { status: 400 },
-    );
+  // Handle delete vendor
+  if (intent === "delete-vendor") {
+    const rfc = String(formData.get("rfc") ?? "").trim();
+    if (!rfc) {
+      return json<DeleteActionData>(
+        { ok: false, error: "RFC del proveedor requerido." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      await deleteVendorByRfc(rfc, accessToken, companyId);
+      return json<DeleteActionData>({
+        ok: true,
+        message: `Proveedor ${rfc} eliminado exitosamente.`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo eliminar el proveedor.";
+      return json<DeleteActionData>({ ok: false, error: message }, { status: 500 });
+    }
   }
 
-  try {
-    const result = await sendVendorInvite(email, accessToken, companyId);
-    return json<InviteActionData>({
-      ok: true,
-      shareLink: result.shareLink,
-      expiresAt: result.expiresAt,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "No se pudo enviar la invitación.";
-    return json<InviteActionData>({ ok: false, error: message }, { status: 500 });
-  }
+  return json<ActionData>({ ok: false, error: "Acción desconocida" }, { status: 400 });
 }
 
 const RISK_TONE = {
@@ -140,6 +174,7 @@ type ViewMode = "table" | "cards";
 
 export default function VendorsPage() {
   const { vendors } = useLoaderData<typeof loader>();
+  const deleteFetcher = useFetcher<DeleteActionData>();
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -148,43 +183,53 @@ export default function VendorsPage() {
   const [view, setView] = useState<ViewMode>("table");
   const [selectedId, setSelectedId] = useState<string | null>(vendors[0]?.id ?? null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [vendorToDelete, setVendorToDelete] = useState<ActiveVendorSummary | null>(null);
 
   const categories = useMemo(() => {
-    const set = new Set<string>();
-    for (const v of vendors) set.add(v.category);
-    return Array.from(set);
+    // Categorías deshabilitadas hasta que haya scorecard
+    return [];
   }, [vendors]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return vendors.filter((v) => {
-      if (categoryFilter !== "all" && v.category !== categoryFilter) return false;
-      if (statusFilter !== "all" && v.status !== statusFilter) return false;
-      if (riskFilter !== "all" && v.risk !== riskFilter) return false;
-      if (
-        q &&
-        !v.name.toLowerCase().includes(q) &&
-        !v.short.toLowerCase().includes(q) &&
-        !v.contact.toLowerCase().includes(q)
-      )
-        return false;
+      // Filtros simplificados - solo búsqueda por nombre/email/RFC
+      if (q) {
+        const name = (v.vendorLegalName || v.name).toLowerCase();
+        const email = v.email.toLowerCase();
+        const rfc = (v.rfc || "").toLowerCase();
+        if (!name.includes(q) && !email.includes(q) && !rfc.includes(q)) {
+          return false;
+        }
+      }
       return true;
     });
-  }, [vendors, search, categoryFilter, statusFilter, riskFilter]);
+  }, [vendors, search]);
 
   const selected = vendors.find((v) => v.id === selectedId) ?? null;
 
-  // KPIs
-  const activos = vendors.filter((v) => v.status === "Activo").length;
-  const onTimeAvg = Math.round(
-    vendors.reduce((acc, v) => acc + v.onTime, 0) / Math.max(vendors.length, 1),
-  );
-  const totalOutstandingMxn = vendors.reduce((acc, v) => {
-    if (v.currency === "USD") return acc + v.outstanding * 17.42;
-    if (v.currency === "EUR") return acc + v.outstanding * 18.7;
-    return acc + v.outstanding;
-  }, 0);
-  const highRisk = vendors.filter((v) => v.risk === "Alto").length;
+  // KPIs simplificados (scorecard pendiente)
+  const activos = vendors.length; // Todos son activos por ahora
+  const onTimeAvg: number = 0; // Scorecard pendiente
+  const totalOutstandingMxn: number = 0; // Scorecard pendiente
+  const highRisk: number = 0; // Scorecard pendiente
+
+  // Handle successful deletion
+  useEffect(() => {
+    if (deleteFetcher.data && "ok" in deleteFetcher.data && deleteFetcher.data.ok) {
+      setDeleteConfirmOpen(false);
+      setVendorToDelete(null);
+      // Recargar después de eliminar exitosamente
+      window.location.reload();
+    }
+  }, [deleteFetcher.data]);
+
+  const isDeleting = deleteFetcher.state !== "idle";
+  const deleteError =
+    deleteFetcher.data && "ok" in deleteFetcher.data && !deleteFetcher.data.ok
+      ? deleteFetcher.data.error
+      : null;
 
   return (
     <AuthLayout>
@@ -195,9 +240,7 @@ export default function VendorsPage() {
               Directorio de <em>proveedores</em>
             </h1>
             <p className="ff-page-sub">
-              {vendors.length} proveedores · {activos} activos · saldo total{" "}
-              {fmtCurrency(totalOutstandingMxn, "MXN").symbol}
-              {(totalOutstandingMxn / 1000).toFixed(1)}K MXN
+              {vendors.length} proveedor{vendors.length === 1 ? "" : "es"} · {activos} activo{activos === 1 ? "" : "s"}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -322,18 +365,17 @@ export default function VendorsPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Proveedor</TableHead>
-                      <TableHead>Categoría</TableHead>
-                      <TableHead>Ubicación</TableHead>
-                      <TableHead className="w-[140px]">A tiempo</TableHead>
-                      <TableHead className="text-right">Saldo</TableHead>
-                      <TableHead>Riesgo</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Teléfono</TableHead>
                       <TableHead>Estado</TableHead>
+                      <TableHead className="w-[80px]">Acciones</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filtered.map((v) => {
-                      const m = fmtCurrency(v.outstanding, v.currency);
                       const active = v.id === selectedId;
+                      const displayName = v.vendorLegalName || v.name;
+                      const initials = displayName.slice(0, 2).toUpperCase();
                       return (
                         <TableRow
                           key={v.id}
@@ -347,63 +389,47 @@ export default function VendorsPage() {
                           <TableCell>
                             <div className="flex items-center gap-2.5 min-w-0">
                               <span className="grid h-8 w-8 place-items-center rounded-full bg-clay-soft text-clay-deep font-display text-[12px] font-semibold flex-shrink-0">
-                                {v.short}
+                                {initials}
                               </span>
                               <div className="min-w-0">
                                 <div className="font-medium text-[13px] truncate max-w-[200px]">
-                                  {v.name}
+                                  {displayName}
                                 </div>
                                 <div className="font-mono text-[10.5px] text-ink-3">
-                                  {v.id} · desde {v.since}
+                                  {v.rfc}
                                 </div>
                               </div>
                             </div>
                           </TableCell>
-                          <TableCell>
-                            <span className="inline-block rounded-full border border-line-2 bg-paper px-2 py-0.5 text-[11px] text-ink-2">
-                              {v.category}
-                            </span>
+                          <TableCell className="text-[12px] text-ink-2">
+                            {v.email}
                           </TableCell>
                           <TableCell className="text-[12px] text-ink-2">
-                            {v.city}
+                            {v.phone || "—"}
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-[12px] w-8">
-                                {v.onTime}%
-                              </span>
-                              <AgingBar
-                                pct={v.onTime}
-                                tone={onTimeBarTone(v.onTime)}
-                                className="flex-1"
-                                label={`A tiempo ${v.name}`}
-                              />
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <span className="font-mono font-medium">
-                              {m.symbol}
-                              {m.integer}
-                              <span className="text-ink-3">.{m.decimal}</span>
-                            </span>
-                            <span className="ml-1 font-mono text-[10px] text-ink-3">
-                              {m.code}
-                            </span>
+                            <Badge tone="moss">Activo</Badge>
                           </TableCell>
                           <TableCell>
-                            <Badge tone={RISK_TONE[v.risk]}>{v.risk}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge tone={STATUS_TONE[v.status] ?? "ink"}>
-                              {v.status}
-                            </Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setVendorToDelete(v);
+                                setDeleteConfirmOpen(true);
+                              }}
+                              className="h-8 w-8 p-0 text-wine hover:bg-wine-soft hover:text-wine-deep"
+                            >
+                              <Icon name="trash" size={14} />
+                            </Button>
                           </TableCell>
                         </TableRow>
                       );
                     })}
                     {filtered.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-center py-14">
+                        <TableCell colSpan={8} className="text-center py-14">
                           <Icon
                             name="vendors"
                             size={32}
@@ -436,6 +462,14 @@ export default function VendorsPage() {
         </div>
       </div>
       <InviteVendorDialog open={inviteOpen} onOpenChange={setInviteOpen} />
+      <DeleteVendorDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        vendor={vendorToDelete}
+        fetcher={deleteFetcher}
+        isDeleting={isDeleting}
+        error={deleteError}
+      />
     </AuthLayout>
   );
 }
@@ -601,16 +635,114 @@ function InviteVendorDialog({
   );
 }
 
+function DeleteVendorDialog({
+  open,
+  onOpenChange,
+  vendor,
+  fetcher,
+  isDeleting,
+  error,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  vendor: ActiveVendorSummary | null;
+  fetcher: ReturnType<typeof useFetcher<DeleteActionData>>;
+  isDeleting: boolean;
+  error: string | null;
+}) {
+  if (!vendor) return null;
+
+  const handleDelete = () => {
+    fetcher.submit(
+      { intent: "delete-vendor", rfc: vendor.id },
+      { method: "post" }
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[480px]">
+        <DialogHeader>
+          <DialogTitle className="font-display text-[20px] text-wine">
+            ¿Eliminar proveedor?
+          </DialogTitle>
+          <DialogDescription className="text-[13px] text-ink-3">
+            Esta acción eliminará permanentemente al proveedor{" "}
+            <strong className="text-ink-1">{vendor.name}</strong> (RFC: {vendor.id}) y todos
+            sus datos relacionados:
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-2 py-2">
+          <Alert className="bg-wine-soft/30 border-wine/20">
+            <Icon name="warn" size={14} className="text-wine" />
+            <AlertDescription className="text-[12px] text-ink-2">
+              Se eliminarán:
+              <ul className="mt-2 ml-4 space-y-1 list-disc">
+                <li>Todas las facturas asociadas</li>
+                <li>Órdenes de compra</li>
+                <li>Notas de crédito y complementos</li>
+                <li>Usuarios y vínculos con la empresa</li>
+              </ul>
+            </AlertDescription>
+          </Alert>
+        </div>
+
+        {error && (
+          <Alert className="bg-wine-soft border-wine/20">
+            <Icon name="warn" size={14} className="text-wine" />
+            <AlertDescription className="text-[12px] text-wine">
+              {error}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <DialogFooter className="gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={isDeleting}
+            className="h-10"
+          >
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleDelete}
+            disabled={isDeleting}
+            className="h-10 bg-wine hover:bg-wine-deep"
+          >
+            {isDeleting ? (
+              <>
+                <span className="mr-2 h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                Eliminando…
+              </>
+            ) : (
+              <>
+                <Icon name="trash" size={14} className="mr-2" />
+                Eliminar permanentemente
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function VendorCard({
   vendor,
   active,
   onClick,
 }: {
-  vendor: SampleVendor;
+  vendor: ActiveVendorSummary;
   active: boolean;
   onClick: () => void;
 }) {
-  const m = fmtCurrency(vendor.outstanding, vendor.currency);
+  const displayName = vendor.vendorLegalName || vendor.name;
+  const initials = displayName.slice(0, 2).toUpperCase();
   return (
     <button
       type="button"
@@ -624,30 +756,29 @@ function VendorCard({
     >
       <div className="flex items-center gap-2.5 mb-3">
         <span className="grid h-9 w-9 place-items-center rounded-md bg-clay-soft text-clay-deep font-display text-[13px] font-semibold flex-shrink-0">
-          {vendor.short}
+          {initials}
         </span>
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-medium truncate">{vendor.name}</div>
+          <div className="text-[13px] font-medium truncate">{displayName}</div>
           <div className="text-[10.5px] text-ink-3 font-mono truncate">
-            {vendor.city} · {vendor.category}
+            {vendor.rfc}
           </div>
         </div>
-        <Badge tone={STATUS_TONE[vendor.status] ?? "ink"}>{vendor.status}</Badge>
+        <Badge tone="moss">Activo</Badge>
       </div>
       <div className="grid grid-cols-2 gap-2 text-[12px]">
         <div className="rounded-md bg-paper-2 px-2.5 py-2">
           <div className="font-mono text-[10px] uppercase tracking-wider text-ink-3">
-            A tiempo
+            Email
           </div>
-          <div className="font-mono text-[14px] mt-0.5">{vendor.onTime}%</div>
+          <div className="text-[11px] mt-0.5 truncate">{vendor.email}</div>
         </div>
         <div className="rounded-md bg-paper-2 px-2.5 py-2">
           <div className="font-mono text-[10px] uppercase tracking-wider text-ink-3">
-            Saldo
+            Teléfono
           </div>
-          <div className="font-mono text-[14px] mt-0.5">
-            {m.symbol}
-            {m.integer}
+          <div className="text-[11px] mt-0.5">
+            {vendor.phone || "—"}
           </div>
         </div>
       </div>

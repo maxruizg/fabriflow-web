@@ -430,6 +430,9 @@ export async function fetchInvoices(
   const queryString = params.toString();
   const endpoint = `/api/invoices${queryString ? `?${queryString}` : ''}`;
 
+  console.log('[fetchInvoices] Calling endpoint:', endpoint);
+  console.log('[fetchInvoices] Filters:', filters);
+
   return apiRequest<CursorPaginatedResponse<InvoiceBackend>>(
     endpoint,
     {
@@ -655,7 +658,7 @@ async function uploadFile<T>(
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
+    const errorData = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
     throw new ApiServerError(
       errorData.message || `Error uploading file: ${response.status}`,
       response.status
@@ -730,7 +733,7 @@ export async function uploadCompleteInvoice(
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
+    const errorData = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
     throw new ApiServerError(
       errorData.message || `Error uploading invoice: ${response.status}`,
       response.status,
@@ -771,6 +774,59 @@ export interface InvoiceUploadResponse {
     unmatchedOrderLines: number;
   };
   mismatchSummary?: string;
+}
+
+/**
+ * Upload payment receipt for an invoice
+ * The backend will automatically extract the amount from the receipt
+ */
+export async function uploadInvoicePayment(
+  token: string,
+  companyId: string,
+  invoiceId: string,
+  file: File
+): Promise<InvoicePaymentUploadResponse> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/api/invoices/${invoiceId}/payment`;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'X-Company-Id': companyId,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new ApiServerError(
+      errorData.message || `Error uploading payment: ${response.status}`,
+      response.status,
+      errorData.error
+    );
+  }
+
+  return response.json();
+}
+
+/**
+ * Response from invoice payment upload
+ */
+export interface InvoicePaymentUploadResponse {
+  message: string;
+  paymentId: string;
+  receiptUrl: string;
+  balanceAfter: {
+    total: number;
+    paid: number;
+    credited: number;
+    outstanding: number;
+    currency: string;
+  };
 }
 
 // ============================================================================
@@ -884,6 +940,71 @@ export async function sendVendorInvite(
   );
 }
 
+export interface VendorDeletionSummary {
+  rfc: string;
+  nombre: string;
+  companyId: string;
+  facturas: number;
+  ordenesCompra: number;
+  notasCredito: number;
+  complementosPago: number;
+  vinculosEmpresas: number;
+  usuarios: number;
+  invitacionesPendientes: number;
+}
+
+export async function getVendorDeletionSummary(
+  rfc: string,
+  token: string,
+  companyId: string
+): Promise<VendorDeletionSummary> {
+  return apiRequest<VendorDeletionSummary>(
+    `/api/vendors/by-rfc/${encodeURIComponent(rfc)}/deletion-summary`,
+    {
+      method: 'GET',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
+export interface DeleteVendorResponse {
+  success: boolean;
+  message: string;
+  rfc: string;
+  companyId: string;
+  deleted: {
+    invoices: number;
+    purchaseOrders: number;
+    creditNotes: number;
+    paymentComplements: number;
+    buyerVendorLinks: number;
+    userCompanyRoles: number;
+    users: number;
+    invitations: number;
+    company: number;
+  };
+}
+
+export async function deleteVendorByRfc(
+  rfc: string,
+  token: string,
+  companyId: string
+): Promise<DeleteVendorResponse> {
+  return apiRequest<DeleteVendorResponse>(
+    `/api/vendors/by-rfc/${encodeURIComponent(rfc)}`,
+    {
+      method: 'DELETE',
+      headers: {
+        'X-Company-Id': companyId,
+      },
+    },
+    token
+  );
+}
+
 export interface PublicVendorInviteResponse {
   company: {
     id: string;
@@ -892,6 +1013,13 @@ export interface PublicVendorInviteResponse {
   };
   vendorEmailHint: string;
   expiresAt: string;
+  existingVendor?: {
+    rfc: string;
+    name: string;
+    phone: string | null;
+    vendorCompanyType: string; // "legal" | "personal"
+    isReactivation: boolean;
+  };
 }
 
 export async function fetchPublicVendorInvite(
@@ -903,11 +1031,49 @@ export async function fetchPublicVendorInvite(
   );
 }
 
+export interface UploadConstanciaFiscalResponse {
+  rfc: string;
+  razonSocial: string | null;
+  constanciaKey: string;
+  message: string;
+}
+
+/**
+ * Sube la constancia de situación fiscal y extrae el RFC automáticamente.
+ * Este es el PASO 1 del registro de proveedores.
+ */
+export async function uploadConstanciaFiscal(
+  inviteToken: string,
+  formData: FormData
+): Promise<UploadConstanciaFiscalResponse> {
+  const apiUrl = getApiBaseUrl();
+  const url = `${apiUrl}/api/public/vendor-invite/${encodeURIComponent(inviteToken)}/upload-constancia`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    body: formData, // Enviamos el multipart/form-data directamente
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMessage = 'Error subiendo constancia fiscal';
+    try {
+      const errorData = JSON.parse(errorText);
+      errorMessage = errorData.message || errorData.error || errorMessage;
+    } catch {
+      errorMessage = errorText || errorMessage;
+    }
+    throw new Error(errorMessage);
+  }
+
+  return response.json();
+}
+
 export interface AcceptVendorInvitePayload {
   email: string;
   password: string;
   name: string;
-  vendorRfc: string;
+  constanciaKey: string; // ✅ Ahora enviamos la key de la constancia, no el RFC
   vendorCompanyType: 'legal' | 'personal';
   vendorLegalName: string;
   contactLastname?: string;

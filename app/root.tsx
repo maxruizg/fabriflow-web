@@ -19,6 +19,7 @@ import { json } from "@remix-run/cloudflare";
 import { AuthProvider } from "~/lib/auth-context";
 import { ThemeProvider } from "~/lib/theme-context";
 import { RoleProvider } from "~/lib/role-context";
+import { SidebarProvider } from "~/lib/sidebar-context";
 import { getAccessTokenFromSession, getUserFromSession } from "~/lib/session.server";
 import { fetchPendingBuyerActivation, listPendingVendors } from "~/lib/api.server";
 import { ErrorScreen } from "~/components/ui/error-screen";
@@ -91,6 +92,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     themePrefs,
     pendingNotificationsCount,
     hasPendingBuyerActivation,
+    ENV: {
+      API_BASE_URL: process.env.API_BASE_URL || "http://localhost:8080",
+    },
   });
 }
 
@@ -172,6 +176,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     density: "comfortable",
     dottedBg: true,
   };
+  const env = data?.ENV ?? { API_BASE_URL: "http://localhost:8080" };
 
   return (
     <html
@@ -195,6 +200,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Meta />
         <Links />
         <script dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }} />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.ENV = ${JSON.stringify(env)};`,
+          }}
+        />
       </head>
       <body className={bodyClasses(prefs)}>
         {children}
@@ -212,7 +222,9 @@ export default function App() {
     <ThemeProvider defaultPrefs={themePrefs}>
       <AuthProvider user={user}>
         <RoleProvider>
-          <Outlet />
+          <SidebarProvider>
+            <Outlet />
+          </SidebarProvider>
         </RoleProvider>
       </AuthProvider>
     </ThemeProvider>

@@ -63,7 +63,7 @@ export function StatCard({
       <div className="ff-stat-label">{label}</div>
       <div className="ff-stat-val ff-num">
         {currency ? (
-          <span className="mr-1 text-[18px] italic font-normal text-ink-3 align-baseline">
+          <span className="mr-1 text-[14px] italic font-normal text-ink-3 align-baseline">
             {currency}
           </span>
         ) : null}
@@ -72,7 +72,7 @@ export function StatCard({
       {delta ? (
         <div
           className={cn(
-            "mt-2.5 inline-flex items-center gap-1 font-mono text-[11px]",
+            "mt-1.5 inline-flex items-center gap-1 font-mono text-[10.5px]",
             delta.direction === "up" && "text-moss-deep",
             delta.direction === "dn" && "text-wine",
             (!delta.direction || delta.direction === "flat") && "text-ink-3",

@@ -283,7 +283,7 @@ export interface MultiPayment {
 // ============================================================================
 
 /** Estado de factura del backend */
-export type InvoiceStatus = 'pendiente' | 'recibido' | 'pagado' | 'completado' | 'rechazado';
+export type InvoiceStatus = 'creada' | 'autorizada' | 'recibido' | 'facturada' | 'pagada' | 'completada' | 'rechazada';
 
 /** Detalle/concepto de factura del backend */
 export interface InvoiceDetailBackend {
@@ -313,6 +313,7 @@ export interface InvoiceBackend {
   total: number;
   moneda: string;
   tipoCambio?: number;
+  condicionesPago?: string;
   estado: InvoiceStatus;
   detalles: InvoiceDetailBackend[];
   pdfUrl?: string;

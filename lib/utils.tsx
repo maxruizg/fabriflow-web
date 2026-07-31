@@ -28,32 +28,43 @@ const TONE_CLASS: Record<StatusTone, string> = {
  * to its semantic tone and a normalized Spanish display label.
  */
 const STATUS_MAP: Record<string, { tone: StatusTone; label: string }> = {
-  // legacy invoice/CFDI statuses
-  pending: { tone: "rust", label: "Pendiente" },
-  pendiente: { tone: "rust", label: "Pendiente" },
-  paid: { tone: "moss", label: "Pagado" },
-  pagado: { tone: "moss", label: "Pagado" },
+  // Estados unificados para todos los documentos (Órdenes, Facturas, etc.)
+  creada: { tone: "rust", label: "Creada" },
+  autorizada: { tone: "clay", label: "Autorizada" },
+  recibido: { tone: "moss", label: "Recibido" },
+  facturada: { tone: "clay", label: "Facturada" },
+  pagada: { tone: "moss", label: "Pagada" },
+  completada: { tone: "ink", label: "Completada" },
+  rechazada: { tone: "wine", label: "Rechazada" },
+
+  // Estados legacy/variantes para compatibilidad
+  pendiente: { tone: "rust", label: "Creada" },
+  completado: { tone: "ink", label: "Completada" },
+  pagado: { tone: "moss", label: "Pagada" },
+  rechazado: { tone: "wine", label: "Rechazada" },
+
+  // Estados adicionales de vendor/provider
   active: { tone: "moss", label: "Activo" },
   activo: { tone: "moss", label: "Activo" },
   overdue: { tone: "wine", label: "Vencido" },
   vencido: { tone: "wine", label: "Vencido" },
-  rejected: { tone: "wine", label: "Rechazado" },
-  rechazado: { tone: "wine", label: "Rechazado" },
   inactive: { tone: "wine", label: "Inactivo" },
   inactivo: { tone: "wine", label: "Inactivo" },
-  recibido: { tone: "moss", label: "Recibido" },
-  completado: { tone: "ink", label: "Completado" },
+  revisar: { tone: "rust", label: "Revisar" },
 
-  // procurement (new design vocabulary)
+  // Estados de logística (para órdenes en tránsito)
   "en tránsito": { tone: "clay", label: "En tránsito" },
   "en transito": { tone: "clay", label: "En tránsito" },
+  en_transito: { tone: "clay", label: "En tránsito" },
   confirmado: { tone: "moss", label: "Confirmado" },
   "revisión calidad": { tone: "rust", label: "Revisión calidad" },
   "revision calidad": { tone: "rust", label: "Revisión calidad" },
+  revision_calidad: { tone: "rust", label: "Revisión calidad" },
   cerrado: { tone: "ink", label: "Cerrado" },
   incidencia: { tone: "wine", label: "Incidencia" },
   "pendiente conf.": { tone: "rust", label: "Pendiente conf." },
   "pendiente conf": { tone: "rust", label: "Pendiente conf." },
+  pendiente_conf: { tone: "rust", label: "Pendiente conf." },
   "en revisión": { tone: "rust", label: "En revisión" },
   "en revision": { tone: "rust", label: "En revisión" },
   atrasado: { tone: "wine", label: "Atrasado" },

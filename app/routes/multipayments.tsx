@@ -1,7 +1,11 @@
-import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/cloudflare";
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "@remix-run/cloudflare";
 import { json } from "@remix-run/cloudflare";
-import { Link, useLoaderData } from "@remix-run/react";
-import { useMemo, useState } from "react";
+import { Link, useFetcher, useLoaderData, useRevalidator } from "@remix-run/react";
+import { useEffect, useMemo, useState } from "react";
 
 import { requireUser, getFullSession } from "~/lib/session.server";
 import { useUser } from "~/lib/auth-context";
@@ -9,6 +13,7 @@ import { cn } from "~/lib/utils";
 import {
   fetchPayments,
   fetchActiveVendors,
+  deletePayment,
   type PaymentBackend,
   type ActiveVendorSummary,
 } from "~/lib/procurement-api.server";
@@ -17,6 +22,13 @@ import { AuthLayout } from "~/components/layout/auth-layout";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card } from "~/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog";
 import { Icon } from "~/components/ui/icon";
 import { Toolbar } from "~/components/ui/toolbar";
 import {
@@ -68,23 +80,57 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 }
 
-function vendorName(vendors: ActiveVendorSummary[], id: string): string {
-  return vendors.find((v) => v.id === id)?.name ?? id.slice(0, 8);
+interface ActionResult {
+  ok: boolean;
+  error?: string;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  programado: "Programado",
-  pendiente_conf: "Pendiente conf.",
-  confirmado: "Confirmado",
-  rechazado: "Rechazado",
-};
+export async function action({ request }: ActionFunctionArgs) {
+  const user = await requireUser(request);
+  const session = await getFullSession(request);
+  if (!session?.accessToken || !user.company) {
+    return json<ActionResult>(
+      { ok: false, error: "Sesión inválida" },
+      { status: 401 },
+    );
+  }
 
-const STATUS_TONE: Record<string, "moss" | "clay" | "ink" | "rust" | "wine"> = {
-  programado: "clay",
-  pendiente_conf: "clay",
-  confirmado: "moss",
-  rechazado: "rust",
-};
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+
+  if (intent === "delete") {
+    const paymentId = String(formData.get("paymentId") ?? "");
+    if (!paymentId) {
+      return json<ActionResult>(
+        { ok: false, error: "Falta el ID del multipago" },
+        { status: 400 },
+      );
+    }
+    try {
+      await deletePayment(session.accessToken, user.company, paymentId);
+      return json<ActionResult>({ ok: true });
+    } catch (e: unknown) {
+      const msg =
+        e instanceof Error ? e.message : "No se pudo eliminar el multipago";
+      return json<ActionResult>({ ok: false, error: msg }, { status: 400 });
+    }
+  }
+
+  return json<ActionResult>(
+    { ok: false, error: "Acción desconocida" },
+    { status: 400 },
+  );
+}
+
+function hasAny(perms: string[], required: string[]): boolean {
+  if (perms.includes("*")) return true;
+  return required.some((p) => perms.includes(p));
+}
+
+function vendorName(vendors: ActiveVendorSummary[], id: string): string {
+  const v = vendors.find((v) => v.id === id);
+  return v?.vendorLegalName || v?.name || id.slice(0, 8);
+}
 
 function fmtMoney(amount: number, currency: string): string {
   return `$${amount.toLocaleString("es-MX", {
@@ -96,10 +142,23 @@ function fmtMoney(amount: number, currency: string): string {
 export default function MultipaymentsPage() {
   const { payments, vendors } = useLoaderData<typeof loader>();
   const { user } = useUser();
+  const revalidator = useRevalidator();
+  const fetcher = useFetcher<typeof action>();
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(
     payments[0]?.id ?? null,
   );
+  const [deletingPayment, setDeletingPayment] = useState<PaymentBackend | null>(null);
+
+  const canDelete = hasAny(user?.permissions ?? [], ["payments:delete"]);
+  const isDeleting = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.ok) {
+      setDeletingPayment(null);
+      revalidator.revalidate();
+    }
+  }, [fetcher.state, fetcher.data, revalidator]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -160,14 +219,13 @@ export default function MultipaymentsPage() {
                   <TableHead>Fecha</TableHead>
                   <TableHead className="text-right">Importe</TableHead>
                   <TableHead className="text-right">Facturas</TableHead>
-                  <TableHead>Estado</TableHead>
                   <TableHead>Comprobante</TableHead>
+                  {canDelete ? <TableHead className="w-10" /> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map((p: PaymentBackend) => {
                   const active = p.id === selectedId;
-                  const statusKey = p.status as string;
                   return (
                     <TableRow
                       key={p.id}
@@ -194,11 +252,6 @@ export default function MultipaymentsPage() {
                         {p.allocations.length}
                       </TableCell>
                       <TableCell>
-                        <Badge tone={STATUS_TONE[statusKey] ?? "ink"}>
-                          {STATUS_LABEL[statusKey] ?? p.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
                         {p.receiptUrl ? (
                           <a
                             href={p.receiptUrl}
@@ -213,12 +266,25 @@ export default function MultipaymentsPage() {
                           <span className="text-ink-4 text-[12px]">—</span>
                         )}
                       </TableCell>
+                      {canDelete ? (
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="text-wine hover:bg-wine-soft"
+                            onClick={() => setDeletingPayment(p)}
+                          >
+                            <Icon name="trash" size={14} />
+                          </Button>
+                        </TableCell>
+                      ) : null}
                     </TableRow>
                   );
                 })}
                 {filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-14">
+                    <TableCell colSpan={canDelete ? 7 : 6} className="text-center py-14">
                       <Icon
                         name="pay"
                         size={32}
@@ -245,6 +311,59 @@ export default function MultipaymentsPage() {
           </div>
         </Card>
       </div>
+
+      <Dialog
+        open={!!deletingPayment}
+        onOpenChange={(open) => !open && setDeletingPayment(null)}
+      >
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Eliminar multipago</DialogTitle>
+            <DialogDescription>
+              Esta acción revertirá el efecto del pago en cada orden vinculada
+              (regresan a su estado anterior y el saldo se recalcula). No se
+              puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg bg-wine-soft border border-wine/20 p-4">
+            <p className="text-[13px] font-medium text-wine">
+              {deletingPayment?.folio}
+            </p>
+            <p className="text-[12px] text-wine/80">
+              {deletingPayment
+                ? fmtMoney(deletingPayment.amount, deletingPayment.currency)
+                : ""}{" "}
+              · {deletingPayment?.allocations.length ?? 0} factura
+              {deletingPayment?.allocations.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          {fetcher.data && !fetcher.data.ok ? (
+            <div className="text-[13px] text-wine bg-wine-soft border border-wine/20 p-3 rounded-lg">
+              {fetcher.data.error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeletingPayment(null)}
+            >
+              Cancelar
+            </Button>
+            <fetcher.Form method="post" className="inline">
+              <input type="hidden" name="intent" value="delete" />
+              <input
+                type="hidden"
+                name="paymentId"
+                value={deletingPayment?.id || ""}
+              />
+              <Button type="submit" variant="destructive" disabled={isDeleting}>
+                {isDeleting ? "Eliminando…" : "Eliminar"}
+              </Button>
+            </fetcher.Form>
+          </div>
+        </DialogContent>
+      </Dialog>
     </AuthLayout>
   );
 }

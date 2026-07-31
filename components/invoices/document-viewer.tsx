@@ -1,14 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Download,
   ExternalLink,
   Minus,
   Plus,
   RotateCcw,
+  RefreshCw,
   FileText,
   Image as ImageIcon,
   FileCode2,
   File as FileIcon,
+  PackageOpen,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "~/components/ui/tabs";
@@ -43,6 +46,103 @@ const KIND_ICON: Record<DocumentKind, React.ComponentType<{ className?: string }
 
 const ZOOM_STEPS = [0.5, 0.65, 0.8, 1, 1.25, 1.5, 1.75, 2];
 
+// Componente para manejar errores de carga del PDF
+function PdfFrame({ url, label, zoom }: { url: string; label: string; zoom: number }) {
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setError(false);
+    setLoading(true);
+
+    // Intentar detectar si el PDF falló al cargar
+    const timeout = setTimeout(() => {
+      // Después de 10 segundos, si todavía está "cargando", probablemente falló
+      setLoading(false);
+    }, 10000);
+
+    // Intentar hacer un fetch HEAD para verificar que el URL es accesible
+    fetch(url, { method: "HEAD" })
+      .then((res) => {
+        clearTimeout(timeout);
+        if (!res.ok) {
+          if (res.status === 400 || res.status === 401) {
+            setError(true);
+            setLoading(false);
+          }
+        } else {
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        clearTimeout(timeout);
+        setError(true);
+        setLoading(false);
+      });
+
+    return () => clearTimeout(timeout);
+  }, [url]);
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full text-ink-3 bg-ink-5">
+        <div className="text-center px-6">
+          <AlertCircle className="h-12 w-12 mx-auto mb-3 opacity-40" />
+          <p className="font-medium text-[13px] text-ink-2">
+            No se pudo cargar el documento
+          </p>
+          <p className="text-[11px] mt-1 mb-4">
+            El enlace del documento ha expirado. Por favor recarga la página para obtener un nuevo enlace.
+          </p>
+          <div className="flex gap-2 justify-center">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => window.location.reload()}
+            >
+              <RefreshCw className="h-3 w-3" />
+              Recargar página
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a href={url} target="_blank" rel="noopener noreferrer" download>
+                <Download className="h-3 w-3" />
+                Descargar
+              </a>
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="w-full h-full origin-top-left"
+      style={{
+        transform: `scale(${zoom})`,
+        width: `${100 / zoom}%`,
+        height: `${100 / zoom}%`,
+      }}
+    >
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-ink-5 text-ink-3">
+          <div className="flex items-center gap-2 text-[12px]">
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            Cargando documento…
+          </div>
+        </div>
+      )}
+      <iframe
+        key={url}
+        src={url}
+        className="w-full h-full border-0 bg-white"
+        title={label}
+        onLoad={() => setLoading(false)}
+      />
+    </div>
+  );
+}
+
 export function DocumentViewer({
   documents,
   activeId,
@@ -51,6 +151,23 @@ export function DocumentViewer({
   className,
 }: DocumentViewerProps) {
   const [zoom, setZoom] = useState(1);
+
+  const downloadAll = () => {
+    documents.forEach((doc, index) => {
+      setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = doc.url;
+        if (doc.downloadName) {
+          a.download = doc.downloadName;
+        }
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }, index * 300); // 300ms delay between each download
+    });
+  };
 
   if (documents.length === 0) {
     return (
@@ -115,21 +232,7 @@ export function DocumentViewer({
       {/* Active document preview */}
       <div className="flex-1 min-h-0 relative bg-ink-5 overflow-hidden">
         {active.kind === "pdf" ? (
-          <div
-            className="w-full h-full origin-top-left"
-            style={{
-              transform: `scale(${zoom})`,
-              width: `${100 / zoom}%`,
-              height: `${100 / zoom}%`,
-            }}
-          >
-            <iframe
-              key={active.url}
-              src={active.url}
-              className="w-full h-full border-0 bg-white"
-              title={active.label}
-            />
-          </div>
+          <PdfFrame url={active.url} label={active.label} zoom={zoom} />
         ) : active.kind === "xml" ? (
           <XmlPreview key={active.url} url={active.url} />
         ) : active.kind === "image" ? (
@@ -216,6 +319,18 @@ export function DocumentViewer({
           )}
         </div>
         <div className="flex items-center gap-1">
+          {documents.length > 1 && (
+            <Button
+              variant="clay"
+              size="sm"
+              className="h-7 text-[11px]"
+              onClick={downloadAll}
+              title="Descargar todos los documentos"
+            >
+              <PackageOpen className="h-3 w-3" />
+              <span className="hidden sm:inline">Descargar todos</span>
+            </Button>
+          )}
           <Button variant="ghost" size="sm" className="h-7 text-[11px]" asChild>
             <a href={active.url} target="_blank" rel="noopener noreferrer">
               <ExternalLink className="h-3 w-3" />

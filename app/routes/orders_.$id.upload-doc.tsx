@@ -255,8 +255,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
       pdfFile,
       expectedInvoiceUuid,
     );
+
+    // Si el upload fue exitoso, redirigir a la orden para forzar revalidación
+    if (result.ok) {
+      return redirect(`/orders/${id}`);
+    }
+
     return json<UploadActionResult<CreditNoteUploadPayload>>(result, {
-      status: result.ok ? 201 : 400,
+      status: 400,
     });
   }
 
@@ -327,8 +333,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
       pdfFile,
       expectedInvoiceUuid,
     );
+
+    // Si el upload fue exitoso, redirigir a la orden para forzar revalidación
+    if (result.ok) {
+      return redirect(`/orders/${id}`);
+    }
+
     return json<UploadActionResult<PaymentComplementUploadPayload>>(result, {
-      status: result.ok ? 201 : 400,
+      status: 400,
     });
   }
 

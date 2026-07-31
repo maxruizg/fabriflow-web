@@ -33,7 +33,7 @@ const badgeVariants = cva(
   },
 );
 
-export type BadgeTone = "ink" | "clay" | "moss" | "rust" | "wine";
+export type BadgeTone = "ink" | "clay" | "moss" | "rust" | "wine" | "amber" | "blue" | "orange" | "purple" | "green" | "teal" | "red";
 
 const TONE_CLASS: Record<BadgeTone, string> = {
   ink: "ff-badge ff-badge-ink",
@@ -41,6 +41,13 @@ const TONE_CLASS: Record<BadgeTone, string> = {
   moss: "ff-badge ff-badge-moss",
   rust: "ff-badge ff-badge-rust",
   wine: "ff-badge ff-badge-wine",
+  amber: "ff-badge bg-amber-100 text-amber-800 border-amber-300",
+  blue: "ff-badge bg-blue-100 text-blue-800 border-blue-300",
+  orange: "ff-badge bg-orange-100 text-orange-800 border-orange-300",
+  purple: "ff-badge bg-purple-100 text-purple-800 border-purple-300",
+  green: "ff-badge bg-green-100 text-green-800 border-green-300",
+  teal: "ff-badge bg-teal-100 text-teal-800 border-teal-300",
+  red: "ff-badge bg-red-100 text-red-800 border-red-300",
 };
 
 export interface BadgeProps

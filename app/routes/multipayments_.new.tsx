@@ -16,18 +16,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { requireUser, getFullSession } from "~/lib/session.server";
 import { useUser } from "~/lib/auth-context";
-import { fetchInvoices } from "~/lib/api.server";
 import {
   fetchActiveVendors,
+  fetchOutstandingInvoicesForVendor,
   submitMultipayment,
   extractReceiptPdf,
   type ActiveVendorSummary,
   type CreatePaymentPayload,
-  type PaymentAllocation,
+  type PaymentAllocationInput,
   type PaymentExtractedMeta,
   type FinalizeMultipaymentResponse,
+  type OutstandingInvoiceSummary,
 } from "~/lib/procurement-api.server";
-import type { InvoiceBackend } from "~/types";
 
 import { AuthLayout } from "~/components/layout/auth-layout";
 import { Alert, AlertDescription } from "~/components/ui/alert";
@@ -63,38 +63,33 @@ export const handle = {
   cta: null,
 };
 
-interface LoaderData {
-  vendors: ActiveVendorSummary[];
-  invoices: InvoiceBackend[];
-}
-
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = await requireUser(request);
   const session = await getFullSession(request);
   if (!session?.accessToken || !user.company) {
     return json({
       vendors: [] as ActiveVendorSummary[],
-      invoices: [] as InvoiceBackend[],
+      invoices: [] as OutstandingInvoiceSummary[],
     });
   }
-  const [vendors, invoicesResponse] = await Promise.all([
+
+  const url = new URL(request.url);
+  const vendorId = url.searchParams.get("vendorId");
+
+  const [vendors, invoices] = await Promise.all([
     fetchActiveVendors(session.accessToken, user.company).catch(
       () => [] as ActiveVendorSummary[],
     ),
-    fetchInvoices(session.accessToken, user.company, {
-      estado: "facturada",
-      limit: 200,
-    }).catch(() => ({
-      data: [] as InvoiceBackend[],
-      nextCursor: null,
-      hasMore: false,
-      count: 0,
-    })),
+    vendorId
+      ? fetchOutstandingInvoicesForVendor(
+          session.accessToken,
+          user.company,
+          vendorId,
+        ).catch(() => [] as OutstandingInvoiceSummary[])
+      : Promise.resolve([] as OutstandingInvoiceSummary[]),
   ]);
-  return json({
-    vendors,
-    invoices: invoicesResponse.data,
-  });
+
+  return json({ vendors, invoices });
 }
 
 interface ActionResult {
@@ -172,9 +167,9 @@ export async function action({ request }: ActionFunctionArgs) {
     const beneficiary = String(formData.get("beneficiary") ?? "");
     const allocationsRaw = String(formData.get("allocations") ?? "[]");
 
-    let allocations: PaymentAllocation[];
+    let allocations: PaymentAllocationInput[];
     try {
-      allocations = JSON.parse(allocationsRaw) as PaymentAllocation[];
+      allocations = JSON.parse(allocationsRaw) as PaymentAllocationInput[];
     } catch {
       return json<ActionResult>(
         { ok: false, error: "Asignaciones inválidas", step: "submit" },
@@ -255,17 +250,16 @@ function fmt(amount: number): string {
 }
 
 export default function NewMultipaymentPage() {
-  const { vendors, invoices } = useLoaderData<typeof loader>();
+  const { vendors, invoices: initialInvoices } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const extractFetcher = useFetcher<typeof action>();
+  const invoicesFetcher = useFetcher<typeof loader>();
   const { user } = useUser();
 
   const [vendorId, setVendorId] = useState<string>("");
   const [folio, setFolio] = useState<string>("");
-  const [date, setDate] = useState<string>(
-    () => new Date().toISOString().slice(0, 10),
-  );
+  const [date, setDate] = useState<string>("");
   const [method, setMethod] = useState<string>("transferencia_spei");
   const [currency, setCurrency] = useState<string>("MXN");
   const [amount, setAmount] = useState<string>("");
@@ -273,52 +267,90 @@ export default function NewMultipaymentPage() {
   const [bank, setBank] = useState<string>("");
   const [beneficiary, setBeneficiary] = useState<string>("");
   const [file, setFile] = useState<File | null>(null);
+  const [vendorInvoices, setVendorInvoices] = useState<OutstandingInvoiceSummary[]>(initialInvoices);
   const [selectedInvoices, setSelectedInvoices] = useState<string[]>([]);
   const [allocations, setAllocations] = useState<Record<string, string>>({});
+  const [fxRates, setFxRates] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // When the extract fetcher returns metadata, pre-fill form fields. The user
-  // can still edit anything; extraction is best-effort and not authoritative.
+  // Monto/fecha/moneda/banco/referencia se derivan exclusivamente de la
+  // lectura del comprobante — no hay captura manual para estos campos. Si el
+  // comprobante no revela un monto, la pantalla se lo hace saber y pide subir
+  // otro archivo en vez de permitir teclearlo.
+  const extractionDone =
+    extractFetcher.state === "idle" &&
+    !!extractFetcher.data &&
+    extractFetcher.data.step === "extract";
+  const extractionMeta = (extractionDone && extractFetcher.data?.ok
+    ? (extractFetcher.data.payload as PaymentExtractedMeta)
+    : null);
+  const extractionFailed =
+    extractionDone && (!extractFetcher.data?.ok || extractionMeta?.amount == null);
+
   useEffect(() => {
-    if (extractFetcher.state !== "idle") return;
-    const data = extractFetcher.data;
-    if (!data || !data.ok || data.step !== "extract") return;
-    const meta = data.payload as PaymentExtractedMeta;
-    if (meta.amount != null && !amount) setAmount(String(meta.amount));
-    if (meta.date && !date.length) setDate(meta.date);
-    else if (meta.date) setDate(meta.date);
-    if (meta.reference && !reference) setReference(meta.reference);
-    if (meta.bank && !bank) setBank(meta.bank);
-    if (meta.currency && !currency) setCurrency(meta.currency);
+    if (!extractionMeta) return;
+    setAmount(extractionMeta.amount != null ? String(extractionMeta.amount) : "");
+    setDate(extractionMeta.date || new Date().toISOString().slice(0, 10));
+    setReference(extractionMeta.reference || "");
+    setBank(extractionMeta.bank || "");
+    setCurrency(extractionMeta.currency || "MXN");
+  }, [extractionMeta]);
+
+  // When the vendor-scoped invoice fetcher returns, refresh the picker list.
+  useEffect(() => {
+    if (invoicesFetcher.state !== "idle" || !invoicesFetcher.data) return;
+    setVendorInvoices(invoicesFetcher.data.invoices);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [extractFetcher.state, extractFetcher.data]);
+  }, [invoicesFetcher.state, invoicesFetcher.data]);
 
-  const vendorInvoices = useMemo(() => {
-    if (!vendorId) return [] as InvoiceBackend[];
-    return invoices.filter((inv) => inv.vendor === vendorId);
-  }, [invoices, vendorId]);
+  function handleVendorChange(id: string) {
+    setVendorId(id);
+    setSelectedInvoices([]);
+    setAllocations({});
+    setFxRates({});
+    if (id) {
+      invoicesFetcher.load(`/multipayments/new?vendorId=${encodeURIComponent(id)}`);
+    } else {
+      setVendorInvoices([]);
+    }
+  }
 
+  // Tipo de cambio requerido por cada moneda extranjera presente entre las
+  // facturas seleccionadas (1 si la factura ya comparte moneda con el pago).
+  const foreignCurrencies = useMemo(() => {
+    const set = new Set<string>();
+    for (const id of selectedInvoices) {
+      const inv = vendorInvoices.find((i) => i.id === id);
+      if (inv && inv.moneda !== currency) set.add(inv.moneda);
+    }
+    return Array.from(set);
+  }, [selectedInvoices, vendorInvoices, currency]);
+
+  function rateFor(invoiceCurrency: string): number {
+    if (invoiceCurrency === currency) return 1;
+    return Number(fxRates[invoiceCurrency] || "0") || 0;
+  }
+
+  // Total asignado, convertido a la moneda del pago.
   const totalAllocated = useMemo(() => {
-    return selectedInvoices.reduce(
-      (sum, id) => sum + (Number(allocations[id] || "0") || 0),
-      0,
-    );
-  }, [selectedInvoices, allocations]);
-
-  const totalSelectedFace = useMemo(() => {
     return selectedInvoices.reduce((sum, id) => {
       const inv = vendorInvoices.find((i) => i.id === id);
-      return sum + (inv?.total ?? 0);
+      if (!inv) return sum;
+      const amt = Number(allocations[id] || "0") || 0;
+      return sum + amt * rateFor(inv.moneda);
     }, 0);
-  }, [selectedInvoices, vendorInvoices]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedInvoices, allocations, vendorInvoices, fxRates, currency]);
 
   const remaining = (Number(amount || "0") || 0) - totalAllocated;
+  const allFxRatesFilled = foreignCurrencies.every(
+    (c) => (Number(fxRates[c] || "0") || 0) > 0,
+  );
   const allocationsValid =
     selectedInvoices.length > 0 &&
+    allFxRatesFilled &&
     Math.abs(remaining) < 0.01 &&
-    selectedInvoices.every(
-      (id) => Number(allocations[id] || "0") > 0,
-    );
+    selectedInvoices.every((id) => (Number(allocations[id] || "0") || 0) > 0);
 
   const submitDisabled =
     !vendorId ||
@@ -344,19 +376,41 @@ export default function NewMultipaymentPage() {
     });
   }
 
-  function toggleInvoice(id: string, total: number) {
-    setSelectedInvoices((prev) => {
-      if (prev.includes(id)) {
-        const next = prev.filter((x) => x !== id);
-        const newAlloc = { ...allocations };
-        delete newAlloc[id];
-        setAllocations(newAlloc);
-        return next;
-      }
-      // No auto-fill: empty input per user decision
-      void total;
-      return [...prev, id];
-    });
+  function toggleInvoice(id: string) {
+    if (selectedInvoices.includes(id)) {
+      setSelectedInvoices(selectedInvoices.filter((x) => x !== id));
+      const next = { ...allocations };
+      delete next[id];
+      setAllocations(next);
+      return;
+    }
+
+    const inv = vendorInvoices.find((i) => i.id === id);
+    const paymentTotal = Number(amount || "0") || 0;
+    const alreadyConverted = selectedInvoices.reduce((sum, pid) => {
+      const pinv = vendorInvoices.find((i) => i.id === pid);
+      if (!pinv) return sum;
+      const amt = Number(allocations[pid] || "0") || 0;
+      return sum + amt * rateFor(pinv.moneda);
+    }, 0);
+    const remainingBefore = Math.max(paymentTotal - alreadyConverted, 0);
+
+    // Auto-relleno: el mínimo entre el saldo de la factura y lo que falte por
+    // asignar del pago. Si las monedas coinciden (o el tipo de cambio ya se
+    // capturó), esto deja el pago balanceado sin que el usuario teclee nada
+    // cuando selecciona exactamente el conjunto correcto de facturas. Sigue
+    // siendo editable después.
+    let prefill = "";
+    if (inv) {
+      const rate = rateFor(inv.moneda);
+      const remainingInInvoiceCurrency =
+        rate > 0 ? remainingBefore / rate : inv.outstanding;
+      const amt = Math.min(inv.outstanding, remainingInInvoiceCurrency);
+      prefill = amt > 0.01 ? amt.toFixed(2) : "";
+    }
+
+    setSelectedInvoices([...selectedInvoices, id]);
+    setAllocations({ ...allocations, [id]: prefill });
   }
 
   function updateAllocation(id: string, value: string) {
@@ -365,21 +419,31 @@ export default function NewMultipaymentPage() {
 
   // Hidden serialized allocations for the submit form
   const allocationsPayload = useMemo(() => {
-    const totalAmount = Number(amount || "0") || 0;
-    if (totalAmount <= 0) return "[]";
     return JSON.stringify(
       selectedInvoices.map((invoiceId) => {
+        const inv = vendorInvoices.find((i) => i.id === invoiceId);
         const amt = Number(allocations[invoiceId] || "0") || 0;
-        return {
+        const rate = inv ? rateFor(inv.moneda) : 1;
+        const convertedAmt = amt * rate;
+        const paymentTotal = Number(amount || "0") || 0;
+        const percentage =
+          paymentTotal > 0
+            ? Math.round((convertedAmt / paymentTotal) * 10000) / 100
+            : 0;
+        const item: PaymentAllocationInput = {
           invoiceId,
           amount: amt,
-          percentage: Math.round((amt / totalAmount) * 10000) / 100,
+          percentage,
+          fxRate: rate,
         };
+        return item;
       }),
     );
-  }, [selectedInvoices, allocations, amount]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedInvoices, allocations, vendorInvoices, fxRates, currency, amount]);
 
   const extracting = extractFetcher.state !== "idle";
+  const loadingInvoices = invoicesFetcher.state !== "idle";
   const submitting = navigation.state !== "idle";
 
   return (
@@ -427,14 +491,14 @@ export default function NewMultipaymentPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="vendor">Proveedor</Label>
-                <Select value={vendorId} onValueChange={setVendorId}>
+                <Select value={vendorId} onValueChange={handleVendorChange}>
                   <SelectTrigger id="vendor">
                     <SelectValue placeholder="Selecciona el proveedor" />
                   </SelectTrigger>
                   <SelectContent>
                     {vendors.map((v) => (
                       <SelectItem key={v.id} value={v.id}>
-                        {v.name}
+                        {v.vendorLegalName || v.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -453,8 +517,8 @@ export default function NewMultipaymentPage() {
                   onChange={onFileChange}
                 />
                 <p className="text-[11px] text-ink-3">
-                  Al subirlo, leeremos el monto, fecha, referencia y banco
-                  automáticamente.
+                  Fecha, monto, moneda, banco y referencia se leen
+                  automáticamente del comprobante — no se capturan a mano.
                 </p>
               </div>
             </div>
@@ -477,42 +541,6 @@ export default function NewMultipaymentPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="date">Fecha</Label>
-                <Input
-                  id="date"
-                  name="date"
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="amount">Monto total</Label>
-                <Input
-                  id="amount"
-                  name="amount"
-                  type="number"
-                  step="0.01"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="currency">Moneda</Label>
-                <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger id="currency">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="MXN">MXN</SelectItem>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="EUR">EUR</SelectItem>
-                  </SelectContent>
-                </Select>
-                <input type="hidden" name="currency" value={currency} />
-              </div>
-              <div className="space-y-2">
                 <Label htmlFor="method">Método</Label>
                 <Select value={method} onValueChange={setMethod}>
                   <SelectTrigger id="method">
@@ -529,26 +557,6 @@ export default function NewMultipaymentPage() {
                 <input type="hidden" name="method" value={method} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="bank">Banco emisor</Label>
-                <Input
-                  id="bank"
-                  name="bank"
-                  value={bank}
-                  onChange={(e) => setBank(e.target.value)}
-                  placeholder="BBVA, Banorte…"
-                />
-              </div>
-              <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="reference">Referencia / clave de rastreo</Label>
-                <Input
-                  id="reference"
-                  name="reference"
-                  value={reference}
-                  onChange={(e) => setReference(e.target.value)}
-                  placeholder="SPEI clave de rastreo o folio de operación"
-                />
-              </div>
-              <div className="space-y-2">
                 <Label htmlFor="beneficiary">Beneficiario (opcional)</Label>
                 <Input
                   id="beneficiary"
@@ -558,6 +566,72 @@ export default function NewMultipaymentPage() {
                 />
               </div>
             </div>
+
+            {/* Fecha/monto/moneda/banco/referencia: solo lectura, derivados
+                del comprobante subido en el paso 1. */}
+            <input type="hidden" name="date" value={date} />
+            <input type="hidden" name="amount" value={amount} />
+            <input type="hidden" name="currency" value={currency} />
+            <input type="hidden" name="bank" value={bank} />
+            <input type="hidden" name="reference" value={reference} />
+
+            {!file ? (
+              <Alert>
+                <AlertDescription>
+                  Sube el comprobante en el paso 1 para detectar fecha, monto,
+                  moneda y banco automáticamente.
+                </AlertDescription>
+              </Alert>
+            ) : extracting ? (
+              <Alert>
+                <AlertDescription>Leyendo comprobante…</AlertDescription>
+              </Alert>
+            ) : extractionFailed ? (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  No pudimos detectar el monto en este comprobante. Sube un
+                  archivo distinto en el paso 1 — este campo no se puede
+                  capturar a mano.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 rounded-lg border bg-paper-2 p-4">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-ink-3">
+                    Fecha
+                  </div>
+                  <div className="font-mono text-[13px]">{date || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-ink-3">
+                    Monto
+                  </div>
+                  <div className="font-mono text-[13px]">
+                    ${fmt(Number(amount || "0") || 0)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-ink-3">
+                    Moneda
+                  </div>
+                  <div className="font-mono text-[13px]">{currency}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-ink-3">
+                    Banco
+                  </div>
+                  <div className="font-mono text-[13px]">{bank || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-ink-3">
+                    Referencia
+                  </div>
+                  <div className="font-mono text-[13px] truncate">
+                    {reference || "—"}
+                  </div>
+                </div>
+              </div>
+            )}
           </Card>
 
           {/* Step 3 — Allocation table */}
@@ -566,7 +640,7 @@ export default function NewMultipaymentPage() {
               <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-2">
                 3. Facturas a cubrir
               </h2>
-              {vendorId ? (
+              {vendorId && !loadingInvoices ? (
                 <span className="text-[12px] text-ink-3">
                   {vendorInvoices.length} factura
                   {vendorInvoices.length === 1 ? "" : "s"} facturada
@@ -576,11 +650,40 @@ export default function NewMultipaymentPage() {
               ) : null}
             </div>
 
+            {foreignCurrencies.length > 0 ? (
+              <div className="space-y-2 rounded-lg border bg-paper-2 p-3">
+                <p className="text-[12px] font-medium text-ink-2">
+                  Tipo de cambio
+                </p>
+                {foreignCurrencies.map((cur) => (
+                  <div key={cur} className="flex items-center gap-2">
+                    <Label className="text-[12px] w-40 shrink-0">
+                      1 {cur} = ? {currency}
+                    </Label>
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      value={fxRates[cur] ?? ""}
+                      onChange={(e) =>
+                        setFxRates((prev) => ({ ...prev, [cur]: e.target.value }))
+                      }
+                      placeholder="0.0000"
+                      className="w-32"
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
             {!vendorId ? (
               <Alert>
                 <AlertDescription>
                   Selecciona el proveedor para listar sus facturas.
                 </AlertDescription>
+              </Alert>
+            ) : loadingInvoices ? (
+              <Alert>
+                <AlertDescription>Cargando facturas…</AlertDescription>
               </Alert>
             ) : vendorInvoices.length === 0 ? (
               <Alert>
@@ -598,7 +701,9 @@ export default function NewMultipaymentPage() {
                       <TableHead>Folio</TableHead>
                       <TableHead>UUID</TableHead>
                       <TableHead>Fecha</TableHead>
-                      <TableHead className="text-right">Total</TableHead>
+                      <TableHead className="text-right">
+                        Saldo pendiente
+                      </TableHead>
                       <TableHead className="text-right w-44">
                         Asignar
                       </TableHead>
@@ -607,15 +712,16 @@ export default function NewMultipaymentPage() {
                   <TableBody>
                     {vendorInvoices.map((inv) => {
                       const checked = selectedInvoices.includes(inv.id);
+                      const isForeign = inv.moneda !== currency;
+                      const rate = rateFor(inv.moneda);
+                      const enteredAmt = Number(allocations[inv.id] || "0") || 0;
                       return (
                         <TableRow key={inv.id}>
                           <TableCell>
                             <Checkbox
                               id={`inv-${inv.id}`}
                               checked={checked}
-                              onCheckedChange={() =>
-                                toggleInvoice(inv.id, inv.total)
-                              }
+                              onCheckedChange={() => toggleInvoice(inv.id)}
                             />
                           </TableCell>
                           <TableCell className="font-mono text-[12px]">
@@ -628,21 +734,33 @@ export default function NewMultipaymentPage() {
                             {inv.fechaEmision?.slice(0, 10)}
                           </TableCell>
                           <TableCell className="text-right font-mono">
-                            ${fmt(inv.total)} {inv.moneda}
+                            <div>${fmt(inv.outstanding)} {inv.moneda}</div>
+                            {isForeign && rate > 0 ? (
+                              <div className="text-[10px] text-ink-3">
+                                ≈ ${fmt(inv.outstanding * rate)} {currency}
+                              </div>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-right">
                             {checked ? (
-                              <Input
-                                type="number"
-                                step="0.01"
-                                value={allocations[inv.id] ?? ""}
-                                onChange={(e) =>
-                                  updateAllocation(inv.id, e.target.value)
-                                }
-                                max={inv.total}
-                                className="w-36 ml-auto text-right"
-                                placeholder="0.00"
-                              />
+                              <>
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={allocations[inv.id] ?? ""}
+                                  onChange={(e) =>
+                                    updateAllocation(inv.id, e.target.value)
+                                  }
+                                  max={inv.outstanding}
+                                  className="w-36 ml-auto text-right"
+                                  placeholder="0.00"
+                                />
+                                {isForeign && rate > 0 && enteredAmt > 0 ? (
+                                  <div className="text-[10px] text-ink-3 mt-0.5">
+                                    ≈ ${fmt(enteredAmt * rate)} {currency}
+                                  </div>
+                                ) : null}
+                              </>
                             ) : (
                               <span className="text-ink-4 text-[12px]">—</span>
                             )}
@@ -658,16 +776,12 @@ export default function NewMultipaymentPage() {
             {selectedInvoices.length > 0 ? (
               <div className="rounded-lg border bg-paper-2 p-4 space-y-1 text-[12px]">
                 <div className="flex justify-between">
-                  <span className="text-ink-3">Total facturas seleccionadas</span>
-                  <span className="font-mono">${fmt(totalSelectedFace)}</span>
-                </div>
-                <div className="flex justify-between">
                   <span className="text-ink-3">Monto del pago</span>
-                  <span className="font-mono">${fmt(Number(amount || "0") || 0)}</span>
+                  <span className="font-mono">${fmt(Number(amount || "0") || 0)} {currency}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-ink-3">Asignado</span>
-                  <span className="font-mono">${fmt(totalAllocated)}</span>
+                  <span className="text-ink-3">Asignado (convertido)</span>
+                  <span className="font-mono">${fmt(totalAllocated)} {currency}</span>
                 </div>
                 <div className="flex justify-between border-t pt-1 mt-1">
                   <span className="font-medium">Por asignar</span>
@@ -679,7 +793,7 @@ export default function NewMultipaymentPage() {
                         : "text-rust-2")
                     }
                   >
-                    ${fmt(remaining)}
+                    ${fmt(remaining)} {currency}
                   </span>
                 </div>
               </div>

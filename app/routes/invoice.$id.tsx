@@ -30,14 +30,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
 import { Icon } from "~/components/ui/icon";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "~/components/ui/table";
-import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -59,6 +51,7 @@ import {
   ErrorScreen,
   type ErrorScreenAction,
 } from "~/components/ui/error-screen";
+import { DocStrip, type DocType } from "~/components/ui/doc-chip";
 import { requireUser, getFullSession } from "~/lib/session.server";
 import {
   fetchInvoice,
@@ -69,13 +62,19 @@ import {
 } from "~/lib/api.server";
 import {
   fetchInvoiceBalance,
+  listPaymentsForInvoice,
+  fetchOrder,
   type InvoiceBalance,
+  type PaymentBackend,
+  type OrderBackend,
 } from "~/lib/procurement-api.server";
 import { listCreditNotesForInvoice } from "~/lib/credit-notes-api.server";
-import type { CreditNote } from "~/types";
+import { listPaymentComplementsForInvoice } from "~/lib/payment-complements-api.server";
+import type { CreditNote, PaymentComplementCfdi } from "~/types";
 import { fmtCurrency } from "~/lib/sample-data";
 import type { InvoiceBackend, InvoiceStatus } from "~/types";
 import { statusTone, statusLabel, cn } from "~/lib/utils";
+import type { BadgeTone } from "~/components/ui/badge";
 
 export const meta: MetaFunction = () => {
   return [
@@ -135,8 +134,6 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const filters = neighborFiltersFromUrl(url);
 
-  // Required: invoice itself. Surface backend status codes / messages so the
-  // UI can distinguish 401/403/404/500 instead of always rendering "404".
   console.log(
     `[invoice.$id] loader: params.id="${invoiceId}" company="${user.company}"`,
   );
@@ -156,13 +153,10 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
       error instanceof Error
         ? error.message
         : "No se pudo cargar la factura";
-    // Include the failing id so the ErrorBoundary's detail chip surfaces
-    // exactly what got sent — saves a console dive.
     const message = `${baseMessage} · id="${invoiceId}"`;
     throw new Response(message, { status });
   }
 
-  // Required for first paint: signed URLs (cheap, single round-trip).
   const urlsResult = await fetchInvoiceUrls(
     session.accessToken,
     user.company,
@@ -172,7 +166,6 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     return null;
   });
 
-  // Saldo: total / pagado / acreditado / falta. No bloquea el render si falla.
   const invoiceBalance = await fetchInvoiceBalance(
     session.accessToken,
     user.company,
@@ -182,7 +175,6 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     return null as InvoiceBalance | null;
   });
 
-  // Notas de crédito vinculadas a esta factura.
   const creditNotes = await listCreditNotesForInvoice(
     session.accessToken,
     user.company,
@@ -192,9 +184,39 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     return [] as CreditNote[];
   });
 
-  // Off the critical path: neighbor lookup walks the paginated list and can
-  // take several round-trips. Defer it so the page renders immediately and
-  // the prev/next buttons stream in once resolved.
+  const payments = await listPaymentsForInvoice(
+    session.accessToken,
+    user.company,
+    invoiceId,
+  ).catch((error) => {
+    console.warn("[invoice.$id] listPaymentsForInvoice failed:", error);
+    return [] as PaymentBackend[];
+  });
+
+  const paymentComplements = await listPaymentComplementsForInvoice(
+    session.accessToken,
+    user.company,
+    invoiceId,
+  )
+    .then((res) => res.data)
+    .catch((error) => {
+      console.warn("[invoice.$id] listPaymentComplementsForInvoice failed:", error);
+      return [] as PaymentComplementCfdi[];
+    });
+
+  // Cargar la orden vinculada si existe, para obtener la remisión
+  let linkedOrder: OrderBackend | null = null;
+  if (invoice.purchaseOrder) {
+    linkedOrder = await fetchOrder(
+      session.accessToken,
+      user.company,
+      invoice.purchaseOrder,
+    ).catch((error) => {
+      console.warn("[invoice.$id] fetchOrder failed:", error);
+      return null;
+    });
+  }
+
   const neighborsPromise = fetchInvoiceNeighbors(
     session.accessToken,
     user.company,
@@ -215,6 +237,9 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     },
     invoiceBalance,
     creditNotes,
+    payments,
+    paymentComplements,
+    linkedOrder,
     isAdmin,
     userPermissions: user.permissions ?? [],
     neighbors: neighborsPromise,
@@ -288,48 +313,43 @@ function fmtMoney(n: number) {
 
 function fmtDate(iso: string) {
   try {
-    return new Date(iso).toLocaleDateString("es-MX", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
+    const d = new Date(iso);
+    const day = d.getDate();
+    const month = d.toLocaleDateString("es-MX", { month: "short" }).replace('.', '');
+    const year = d.getFullYear().toString().slice(-2);
+    return `${day}/${month}/${year}`;
   } catch {
     return "—";
   }
 }
 
-function MetaItem({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <span className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
-        {label}
-      </span>
-      <div className="font-medium text-[13px] text-ink mt-0.5">{children}</div>
-    </div>
-  );
+function inferDocs(inv: InvoiceBackend): DocType[] {
+  const docs: DocType[] = [];
+
+  if (inv.purchaseOrder || inv.ordenCompraKey || inv.ordenCompraUrl) {
+    docs.push("OC");
+  }
+
+  if (inv.purchaseOrder) {
+    docs.push("REM");
+  }
+
+  if (inv.pdfKey || inv.xmlKey || inv.pdfUrl || inv.xmlUrl) {
+    docs.push("FAC");
+  }
+
+  // Si el estado es "pagada" o "completada", mostrar ícono de pago
+  if (inv.estado === "pagada" || inv.estado === "completada") {
+    docs.push("PAGO");
+  }
+
+  return docs;
 }
 
 function InvoiceBalanceCard({ balance }: { balance: InvoiceBalance }) {
-  const cur: "MXN" | "USD" | "EUR" =
-    balance.currency === "MXN" ||
-    balance.currency === "USD" ||
-    balance.currency === "EUR"
-      ? (balance.currency as "MXN" | "USD" | "EUR")
-      : "MXN";
-  const fmt = (n: number) => {
-    const m = fmtCurrency(n, cur);
-    return { display: `${m.symbol}${m.integer}.${m.decimal}`, code: m.code };
-  };
-  const total = fmt(balance.total);
-  const paid = fmt(balance.paid);
-  const credited = fmt(balance.credited ?? 0);
-  const outstanding = fmt(balance.outstanding);
+  const total = fmtMoney(balance.total);
+  const paid = fmtMoney(balance.paid);
+  const outstanding = fmtMoney(balance.outstanding);
   const fullyPaid = balance.outstanding <= 0.01;
   const progress =
     balance.total > 0
@@ -337,60 +357,51 @@ function InvoiceBalanceCard({ balance }: { balance: InvoiceBalance }) {
       : 0;
 
   return (
-    <Card>
+    <Card className="bg-gradient-to-br from-paper to-paper-2">
       <CardHeader className="pb-2">
-        <CardTitle className="text-[11px] font-mono uppercase tracking-wider text-ink-3 font-normal flex items-center justify-between">
-          <span>Saldo</span>
+        <CardTitle className="text-[10px] font-mono uppercase tracking-wider text-ink-3 font-normal flex items-center justify-between">
+          <span>Balance</span>
           {fullyPaid ? (
-            <Badge tone="moss" className="text-[10px]">
-              Pagado
+            <Badge tone="moss" className="text-[9px]">
+              Completamente Pagado
             </Badge>
           ) : null}
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <CardContent className="space-y-2">
+        <div className="grid grid-cols-3 gap-2">
           <div>
-            <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
+            <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3">
               Total
             </p>
-            <p className="font-mono text-[14px] text-ink mt-0.5">
-              {total.display}
-              <span className="ml-1 text-[10.5px] text-ink-3">{total.code}</span>
+            <p className="font-mono text-[13px] text-ink mt-0.5">
+              ${total.int}<span className="text-ink-3">.{total.dec}</span>
             </p>
           </div>
           <div>
-            <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
+            <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3">
               Pagado
             </p>
-            <p className="font-mono text-[14px] text-ink mt-0.5">
-              {paid.display}
+            <p className="font-mono text-[13px] text-moss mt-0.5">
+              ${paid.int}<span className="text-moss/70">.{paid.dec}</span>
             </p>
           </div>
           <div>
-            <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
-              Acreditado
-            </p>
-            <p className="font-mono text-[14px] text-ink mt-0.5">
-              {credited.display}
-            </p>
-          </div>
-          <div>
-            <p className="text-[10.5px] font-mono uppercase tracking-wider text-ink-3">
-              Falta
+            <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3">
+              Saldo
             </p>
             <p
               className={cn(
-                "font-mono text-[14px] mt-0.5",
-                fullyPaid ? "text-ink-3" : "text-ink",
+                "font-mono text-[13px] mt-0.5",
+                fullyPaid ? "text-ink-3" : "text-clay",
               )}
             >
-              {outstanding.display}
+              ${outstanding.int}<span className={fullyPaid ? "text-ink-4" : "text-clay/70"}>.{outstanding.dec}</span>
             </p>
           </div>
         </div>
         <div
-          className="h-1.5 w-full rounded bg-ink-5 overflow-hidden"
+          className="h-2 w-full rounded-full bg-ink-5 overflow-hidden"
           aria-label={`Progreso de pago ${progress.toFixed(0)}%`}
         >
           <div
@@ -401,13 +412,22 @@ function InvoiceBalanceCard({ balance }: { balance: InvoiceBalance }) {
             style={{ width: `${progress}%` }}
           />
         </div>
+        {(balance.credited ?? 0) > 0.01 && (
+          <p className="text-[11px] text-ink-3">
+            Acreditado: <span className="font-mono text-ink">${fmtMoney(balance.credited ?? 0).int}.{fmtMoney(balance.credited ?? 0).dec}</span>
+          </p>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function buildDocuments(invoice: InvoiceBackend): DocumentItem[] {
+function buildDocuments(
+  invoice: InvoiceBackend,
+  linkedOrder: OrderBackend | null
+): DocumentItem[] {
   const docs: DocumentItem[] = [];
+
   if (invoice.pdfUrl) {
     docs.push({
       id: "pdf",
@@ -417,6 +437,7 @@ function buildDocuments(invoice: InvoiceBackend): DocumentItem[] {
       downloadName: `factura-${invoice.folio}.pdf`,
     });
   }
+
   if (invoice.xmlUrl) {
     docs.push({
       id: "xml",
@@ -426,7 +447,17 @@ function buildDocuments(invoice: InvoiceBackend): DocumentItem[] {
       downloadName: `factura-${invoice.folio}.xml`,
     });
   }
-  if (invoice.ordenCompraUrl) {
+
+  // Orden de compra - primero intentar de la orden vinculada, luego el PDF legacy
+  if (linkedOrder?.docState?.ocUrl) {
+    docs.push({
+      id: "orden",
+      label: invoice.orderFolio ? `Orden de Compra (${invoice.orderFolio})` : "Orden de Compra",
+      kind: "pdf",
+      url: linkedOrder.docState.ocUrl,
+      downloadName: `oc-${invoice.orderFolio || invoice.folio}.pdf`,
+    });
+  } else if (invoice.ordenCompraUrl) {
     docs.push({
       id: "orden",
       label: "Orden de Compra",
@@ -435,10 +466,76 @@ function buildDocuments(invoice: InvoiceBackend): DocumentItem[] {
       downloadName: `oc-${invoice.folio}.pdf`,
     });
   }
+
+  // Recepción de la orden vinculada
+  if (linkedOrder?.docState?.remUrl) {
+    docs.push({
+      id: "recepcion",
+      label: "Recepción",
+      kind: "pdf",
+      url: linkedOrder.docState.remUrl,
+      downloadName: `recepcion-${invoice.orderFolio || invoice.folio}.pdf`,
+    });
+  }
+
   return docs;
 }
 
 type ResolvedNeighbors = { prevId: string | null; nextId: string | null };
+
+function DocRow({
+  label,
+  url,
+  internal,
+  uploadHref,
+  statusBadge,
+}: {
+  label: string;
+  url: string | null;
+  internal?: boolean;
+  uploadHref?: string | null;
+  statusBadge?: { label: string; tone: BadgeTone };
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-line bg-paper-2 px-3 py-2">
+      <div className="flex items-center gap-2 text-ink-2">
+        <Icon name="file" size={13} className="text-ink-3" />
+        <span className="text-[12.5px]">{label}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        {statusBadge && <Badge tone={statusBadge.tone}>{statusBadge.label}</Badge>}
+        {url ? (
+          internal ? (
+            <Link to={url} className="text-[12px] text-clay hover:underline">
+              Abrir
+            </Link>
+          ) : (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[12px] text-clay hover:underline"
+            >
+              Descargar
+            </a>
+          )
+        ) : null}
+        {uploadHref ? (
+          <Link
+            to={uploadHref}
+            className="inline-flex items-center gap-1 text-[12px] font-medium text-clay hover:underline"
+          >
+            <Icon name="upload" size={11} />
+            Cargar
+          </Link>
+        ) : null}
+        {!url && !uploadHref && !statusBadge && (
+          <span className="text-[11.5px] text-ink-3">—</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function NeighborSkeleton() {
   return (
@@ -449,11 +546,6 @@ function NeighborSkeleton() {
   );
 }
 
-/**
- * Render-time bridge: copies the resolved neighbor ids from the deferred
- * promise into local state so the keyboard handler and disabled-state logic
- * can read them synchronously. Renders nothing.
- */
 function NeighborSync({
   resolved,
   onResolve,
@@ -468,7 +560,7 @@ function NeighborSync({
 }
 
 export default function InvoiceDetails() {
-  const { invoice, invoiceBalance, creditNotes, isAdmin, userPermissions, neighbors } =
+  const { invoice, invoiceBalance, creditNotes, payments, paymentComplements, linkedOrder, isAdmin, userPermissions, neighbors } =
     useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const submit = useSubmit();
@@ -480,7 +572,7 @@ export default function InvoiceDetails() {
     nextId: null,
   });
 
-  const documents = useMemo(() => buildDocuments(invoice), [invoice]);
+  const documents = useMemo(() => buildDocuments(invoice, linkedOrder), [invoice, linkedOrder]);
 
   const docParam = searchParams.get("doc");
   const activeDocId = useMemo(() => {
@@ -498,6 +590,12 @@ export default function InvoiceDetails() {
     userPermissions.includes("*");
   const canManageNc =
     userPermissions.includes("credit_notes:approve") ||
+    userPermissions.includes("*");
+  const canUploadPayment =
+    userPermissions.includes("payments:upload") ||
+    userPermissions.includes("*");
+  const canUploadComplement =
+    userPermissions.includes("payment_complements:upload") ||
     userPermissions.includes("*");
 
   const filterParamsString = useMemo(() => {
@@ -556,7 +654,7 @@ export default function InvoiceDetails() {
     setSearchParams(next, { replace: true });
   };
 
-  // Keyboard navigation: ← / → between invoices, Esc back
+  // Keyboard navigation
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -591,11 +689,12 @@ export default function InvoiceDetails() {
 
   return (
     <AuthLayout>
-      <div className="h-[calc(100vh-8rem)] flex flex-col">
-        {/* Page header */}
+      <div className="h-[calc(100vh-8rem)] flex flex-col bg-paper">
+        {/* Header - Minimal & Clean */}
         <div className="flex-shrink-0 border-b border-line bg-paper">
-          <div className="px-6 py-3.5 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="px-6 py-2 flex items-center justify-between gap-4">
+            {/* Left: Back + Navigation */}
+            <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
                 size="icon"
@@ -605,18 +704,7 @@ export default function InvoiceDetails() {
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>
-              <div className="min-w-0">
-                <h1 className="ff-page-title !text-[19px] flex items-center gap-2">
-                  <span className="font-mono">{invoice.folio}</span>
-                  <Badge tone={tone}>{label}</Badge>
-                </h1>
-                <p className="ff-page-sub truncate max-w-[520px] mt-0.5">
-                  {invoice.nombreEmisor}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <div className="hidden md:flex items-center gap-1 mr-1">
+              <div className="hidden md:flex items-center gap-1 ml-1 pl-2 border-l border-line">
                 <Suspense fallback={<NeighborSkeleton />}>
                   <Await resolve={neighbors} errorElement={null}>
                     {(resolved: ResolvedNeighbors) => (
@@ -645,6 +733,10 @@ export default function InvoiceDetails() {
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
+            </div>
+
+            {/* Right: Actions */}
+            <div className="flex items-center gap-2">
               {canUploadNc && (
                 <Button size="sm" variant="outline" asChild>
                   <Link
@@ -652,24 +744,21 @@ export default function InvoiceDetails() {
                     title="Subir nota de crédito vinculada a esta factura"
                   >
                     <Icon name="upload" size={13} />
-                    Subir nota de crédito
+                    <span className="hidden lg:inline">Nota de crédito</span>
                   </Link>
                 </Button>
               )}
-              {isAdmin ? (
-                <Select value={invoice.estado} onValueChange={handleStatusChange}>
-                  <SelectTrigger className="w-[160px]" aria-label="Estado de factura">
-                    <Badge tone={tone}>{label}</Badge>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pendiente">Pendiente</SelectItem>
-                    <SelectItem value="recibido">Recibido</SelectItem>
-                    <SelectItem value="pagado">Pagado</SelectItem>
-                    <SelectItem value="completado">Completado</SelectItem>
-                    <SelectItem value="rechazado">Rechazado</SelectItem>
-                  </SelectContent>
-                </Select>
-              ) : null}
+              {isAdmin && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                  onClick={() => setShowDeleteDialog(true)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span className="hidden lg:inline">Eliminar</span>
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="icon"
@@ -689,53 +778,109 @@ export default function InvoiceDetails() {
           </div>
         </div>
 
-        {/* Summary strip */}
-        <div className="flex-shrink-0 bg-paper-2 border-b border-line">
+        {/* Hero Section - Key Info */}
+        <div className="flex-shrink-0 bg-gradient-to-br from-paper to-paper-2 border-b border-line">
           <div className="px-6 py-3">
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              <MetaItem label="Total">
-                <span className="font-mono">
-                  <span className="text-[15px] italic font-normal text-ink-3 mr-0.5">
-                    $
-                  </span>
-                  {total.int}
-                  <span className="text-ink-3">.{total.dec}</span>
-                  <span className="ml-1 text-[11px] text-ink-3">
-                    {invoice.moneda}
-                  </span>
-                </span>
-              </MetaItem>
-              <MetaItem label="Subtotal">
-                <span className="font-mono">
-                  ${subtotal.int}
-                  <span className="text-ink-3">.{subtotal.dec}</span>
-                </span>
-              </MetaItem>
-              <MetaItem label="Fecha Emisión">
-                {fmtDate(invoice.fechaEmision)}
-              </MetaItem>
-              <MetaItem label="Fecha Entrada">
-                {fmtDate(invoice.fechaEntrada)}
-              </MetaItem>
-              <MetaItem label="RFC Emisor">
-                <span className="font-mono text-[12px]">
-                  {invoice.rfcEmisor}
-                </span>
-              </MetaItem>
-              <MetaItem label="RFC Receptor">
-                <span className="font-mono text-[12px]">
-                  {invoice.rfcReceptor}
-                </span>
-              </MetaItem>
+            <div className="flex items-start justify-between gap-6 mb-2">
+              {/* Left: Provider & Status */}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2.5 mb-1.5">
+                  <h1 className="text-[20px] font-semibold font-mono text-ink tracking-tight">
+                    {invoice.folio}
+                  </h1>
+                  {isAdmin ? (
+                    <Select value={invoice.estado} onValueChange={handleStatusChange}>
+                      <SelectTrigger className="w-auto h-auto p-0 border-0 bg-transparent" aria-label="Estado de factura">
+                        <Badge tone={tone} className="text-[11px] px-3 py-1.5 cursor-pointer hover:opacity-80 transition">
+                          {label}
+                        </Badge>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="creada">Creada</SelectItem>
+                        <SelectItem value="autorizada">Autorizada</SelectItem>
+                        <SelectItem value="recibido">Recibido</SelectItem>
+                        <SelectItem value="facturada">Facturada</SelectItem>
+                        <SelectItem value="pagada">Pagada</SelectItem>
+                        <SelectItem value="completada">Completada</SelectItem>
+                        <SelectItem value="rechazada">Rechazada</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Badge tone={tone} className="text-[11px]">{label}</Badge>
+                  )}
+                  <DocStrip docs={inferDocs(invoice)} />
+                </div>
+                <div>
+                  <p className="text-[14px] text-ink font-semibold leading-tight">
+                    {invoice.nombreEmisor}
+                  </p>
+                  <p className="text-[11px] font-mono text-ink-3 mt-0.5">
+                    RFC: {invoice.rfcEmisor}
+                  </p>
+                </div>
+              </div>
+
+              {/* Right: Total Amount - Hero */}
+              <div className="text-right flex-shrink-0">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-ink-3 mb-1">
+                  Monto Total
+                </p>
+                <p className="text-[24px] font-mono font-bold text-ink leading-none">
+                  ${total.int}<span className="text-[18px] text-ink-3">.{total.dec}</span>
+                </p>
+                <p className="text-[12px] font-mono text-ink-2 mt-1">
+                  {invoice.moneda}
+                  {invoice.tipoCambio && invoice.tipoCambio !== 1 && (
+                    <span className="ml-2 text-ink-3">
+                      T.C. {invoice.tipoCambio.toFixed(2)}
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            {/* Quick meta grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 pt-2 border-t border-line/50">
+              <div>
+                <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3 mb-0.5">Subtotal</p>
+                <p className="text-[12px] font-mono text-ink">${subtotal.int}.{subtotal.dec}</p>
+              </div>
+              <div>
+                <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3 mb-0.5">F. Emisión</p>
+                <p className="text-[12px] text-ink">{fmtDate(invoice.fechaEmision)}</p>
+              </div>
+              <div>
+                <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3 mb-0.5">F. Entrada</p>
+                <p className="text-[12px] text-ink">{fmtDate(invoice.fechaEntrada)}</p>
+              </div>
+              <div>
+                <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3 mb-0.5">F. Carga</p>
+                <p className="text-[12px] text-ink">{fmtDate(invoice.createdAt)}</p>
+              </div>
+              {invoice.orderFolio && (
+                <div>
+                  <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3 mb-0.5">OC</p>
+                  <p className="text-[12px] font-mono text-ink">{invoice.orderFolio}</p>
+                </div>
+              )}
+              {invoice.condicionesPago && (
+                <div>
+                  <p className="text-[9px] font-mono uppercase tracking-wider text-ink-3 mb-0.5">Cond. Pago</p>
+                  <p className="text-[12px] text-ink truncate" title={invoice.condicionesPago}>
+                    {invoice.condicionesPago}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Main split */}
+        {/* Main Content */}
         <div className="flex-1 min-h-0 overflow-hidden">
-          <div className="h-full grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-0 divide-y lg:divide-y-0 lg:divide-x divide-line">
-            {/* Left: document viewer */}
-            <div className="min-h-[60vh] lg:min-h-0 lg:h-full p-3">
+          <div className="h-full grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px] gap-0 divide-y lg:divide-y-0 lg:divide-x divide-line">
+
+            {/* Left: Document Viewer */}
+            <div className="min-h-[60vh] lg:min-h-0 lg:h-full p-4 bg-paper">
               <DocumentViewer
                 documents={documents}
                 activeId={activeDocId}
@@ -744,13 +889,13 @@ export default function InvoiceDetails() {
                   <div className="text-center text-ink-3 px-6">
                     <Icon
                       name="file"
-                      size={36}
-                      className="mx-auto mb-3 opacity-30"
+                      size={48}
+                      className="mx-auto mb-4 opacity-20"
                     />
-                    <p className="font-medium text-[13px] text-ink-2">
+                    <p className="font-medium text-[14px] text-ink-2">
                       Sin documentos adjuntos
                     </p>
-                    <p className="text-[11px] mt-1">
+                    <p className="text-[12px] mt-1.5 text-ink-3">
                       Esta factura no tiene PDF, XML ni orden de compra.
                     </p>
                   </div>
@@ -758,197 +903,222 @@ export default function InvoiceDetails() {
               />
             </div>
 
-            {/* Right: details panel */}
-            <div className="min-h-0 overflow-auto bg-paper">
-              <div className="p-6 space-y-5">
+            {/* Right: Info Sidebar */}
+            <div className="min-h-0 overflow-auto bg-paper-2">
+              <div className="p-5 space-y-4">
+
+                {/* Balance Card - Priority #1 */}
+                {invoiceBalance && <InvoiceBalanceCard balance={invoiceBalance} />}
+
                 {/* UUID */}
-                <div className="space-y-1.5">
-                  <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
-                    UUID Fiscal
-                  </p>
-                  <p className="font-mono text-[11px] text-ink-2 bg-ink-5 p-2.5 rounded break-all">
-                    {invoice.uuid}
-                  </p>
-                  {invoice.tipoCambio && invoice.tipoCambio !== 1 ? (
-                    <p className="text-[11px] text-ink-3 mt-1">
-                      Tipo de cambio:{" "}
-                      <span className="font-mono text-ink">
-                        {invoice.tipoCambio}
-                      </span>
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-[11px] font-mono uppercase tracking-wider text-ink-3 font-normal">
+                      UUID Fiscal
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="font-mono text-[10.5px] text-ink-2 bg-ink-5 px-3 py-2.5 rounded-md break-all leading-relaxed select-all">
+                      {invoice.uuid}
                     </p>
-                  ) : null}
-                </div>
-
-                {/* Saldo: total / pagado / acreditado / falta */}
-                {invoiceBalance ? (
-                  <InvoiceBalanceCard balance={invoiceBalance} />
-                ) : null}
-
-                {/* Notas de crédito relacionadas */}
-                <Card className="p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
-                      Notas de crédito relacionadas
-                    </h3>
-                  </div>
-                  {creditNotes.length === 0 ? (
-                    <p className="text-[12px] text-ink-3">
-                      Sin notas de crédito.
-                    </p>
-                  ) : (
-                    <ul className="divide-y divide-line">
-                      {creditNotes.map((cn) => (
-                        <li
-                          key={cn.id}
-                          className="py-2 flex items-center justify-between text-[13px]"
-                        >
-                          <div>
-                            <div className="font-medium text-ink">
-                              {cn.folio}
-                            </div>
-                            <div className="text-[11px] text-ink-3">
-                              {cn.fechaEmision} ·{" "}
-                              <span className="font-mono">
-                                ${cn.total.toFixed(2)}{" "}
-                                {cn.moneda}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {canManageNc && (
-                              <Form
-                                method="post"
-                                action={`/api/credit-notes/${cn.id}`}
-                              >
-                                <input
-                                  type="hidden"
-                                  name="_intent"
-                                  value="delete"
-                                />
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  type="submit"
-                                >
-                                  Revertir
-                                </Button>
-                              </Form>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                  </CardContent>
                 </Card>
 
-                {/* Parties */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-[11px] font-mono uppercase tracking-wider text-ink-3 font-normal">
-                        Emisor
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="font-medium text-[14px] text-ink leading-tight">
-                        {invoice.nombreEmisor}
-                      </p>
-                      <p className="text-[12px] font-mono text-ink-3 mt-1">
-                        {invoice.rfcEmisor}
-                      </p>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-[11px] font-mono uppercase tracking-wider text-ink-3 font-normal">
-                        Receptor
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="font-medium text-[14px] text-ink leading-tight">
-                        {invoice.nombreReceptor}
-                      </p>
-                      <p className="text-[12px] font-mono text-ink-3 mt-1">
-                        {invoice.rfcReceptor}
-                      </p>
-                    </CardContent>
-                  </Card>
-                </div>
+                {/* Parties - Compact */}
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-[11px] font-mono uppercase tracking-wider text-ink-3 font-normal">
+                      Receptor
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="font-medium text-[14px] text-ink leading-tight">
+                      {invoice.nombreReceptor}
+                    </p>
+                    <p className="text-[11px] font-mono text-ink-3 mt-1">
+                      RFC: {invoice.rfcReceptor}
+                    </p>
+                  </CardContent>
+                </Card>
 
-                {/* Conceptos */}
-                <div className="space-y-2">
-                  <h4 className="text-[11px] font-mono uppercase tracking-wider text-ink-3">
-                    Conceptos{" "}
-                    {invoice.detalles?.length
-                      ? `(${invoice.detalles.length})`
-                      : ""}
-                  </h4>
-                  {invoice.detalles && invoice.detalles.length > 0 ? (
-                    <div className="border border-line rounded-lg overflow-hidden">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="bg-ink-5">
-                            <TableHead className="text-[10px] font-mono">
-                              Descripción
-                            </TableHead>
-                            <TableHead className="text-[10px] font-mono text-right w-[60px]">
-                              Cant.
-                            </TableHead>
-                            <TableHead className="text-[10px] font-mono text-right w-[100px]">
-                              Importe
-                            </TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {invoice.detalles.map((d, idx) => {
-                            const im = fmtMoney(d.importe);
-                            return (
-                              <TableRow key={idx}>
-                                <TableCell className="text-[12px]">
-                                  <p className="font-medium text-ink">
+                {/* Conceptos - Collapsible */}
+                {invoice.detalles && invoice.detalles.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-[11px] font-mono uppercase tracking-wider text-ink-3 font-normal">
+                        Conceptos ({invoice.detalles.length})
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2.5 max-h-[300px] overflow-auto">
+                        {invoice.detalles.map((d, idx) => {
+                          const im = fmtMoney(d.importe);
+                          return (
+                            <div key={idx} className="pb-2.5 border-b border-line last:border-0 last:pb-0">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[12px] font-medium text-ink leading-tight">
                                     {d.descripcion}
                                   </p>
-                                  <p className="text-[10px] text-ink-3">
-                                    {d.unidad}
+                                  <p className="text-[10.5px] text-ink-3 mt-1">
+                                    {d.unidad} · Cantidad: {d.cantidad}
                                   </p>
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums text-[12px]">
-                                  {d.cantidad}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums font-medium text-[12px]">
-                                  ${im.int}
-                                  <span className="text-ink-3">.{im.dec}</span>
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  ) : (
-                    <div className="border border-line border-dashed rounded-lg p-4 text-center text-ink-3 text-[12px]">
-                      Sin conceptos disponibles
-                    </div>
-                  )}
-                </div>
+                                </div>
+                                <p className="text-[13px] font-mono font-semibold text-ink whitespace-nowrap flex-shrink-0">
+                                  ${im.int}<span className="text-ink-3 text-[11px]">.{im.dec}</span>
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
-                {/* Admin actions */}
-                {isAdmin ? (
-                  <div className="pt-3 border-t border-line">
-                    <p className="text-[11px] font-mono uppercase tracking-wider text-ink-3 mb-2">
-                      Administración
-                    </p>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="w-full justify-start"
-                      onClick={() => setShowDeleteDialog(true)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Eliminar factura
-                    </Button>
-                  </div>
-                ) : null}
+                {/* Notas de crédito */}
+                {(creditNotes.length > 0 || canUploadNc) && (
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-[11px] font-mono uppercase tracking-wider text-ink-3 font-normal">
+                        Notas de Crédito
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {creditNotes.length === 0 ? (
+                        <p className="text-[12px] text-ink-3">
+                          Sin notas de crédito aplicadas.
+                        </p>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {creditNotes.map((cn) => (
+                            <div
+                              key={cn.id}
+                              className="flex items-center justify-between pb-2.5 border-b border-line last:border-0 last:pb-0"
+                            >
+                              <div>
+                                <p className="text-[12px] font-medium text-ink">
+                                  {cn.folio}
+                                </p>
+                                <p className="text-[10.5px] text-ink-3 mt-0.5">
+                                  {fmtDate(cn.fechaEmision)} · ${cn.total.toFixed(2)} {cn.moneda}
+                                </p>
+                              </div>
+                              {canManageNc && (
+                                <Form
+                                  method="post"
+                                  action={`/api/credit-notes/${cn.id}`}
+                                >
+                                  <input type="hidden" name="_intent" value="delete" />
+                                  <Button variant="ghost" size="sm" type="submit" className="text-[11px]">
+                                    Revertir
+                                  </Button>
+                                </Form>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Documentos */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-[14px]">Documentos</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-[13px] space-y-2">
+                    <DocRow
+                      label="OC (PDF)"
+                      url={linkedOrder?.docState?.ocUrl || invoice.ordenCompraUrl || null}
+                      uploadHref={
+                        !linkedOrder?.docState?.ocUrl && !invoice.ordenCompraUrl
+                          ? `/invoice/${invoice.id}/upload-doc?kind=oc`
+                          : null
+                      }
+                    />
+                    <DocRow
+                      label="Remisión"
+                      url={linkedOrder?.docState?.remUrl ?? null}
+                    />
+                    <DocRow
+                      label="Factura (PDF)"
+                      url={invoice.pdfUrl || null}
+                    />
+                    <DocRow
+                      label="Factura (XML)"
+                      url={invoice.xmlUrl || null}
+                    />
+                    {payments.map((payment) => (
+                      <DocRow
+                        key={payment.id}
+                        label={`Comprobante de pago (${payment.folio})`}
+                        url={payment.receiptUrl || null}
+                      />
+                    ))}
+                    {canUploadPayment &&
+                     invoice.estado === "facturada" &&
+                     invoiceBalance &&
+                     invoiceBalance.outstanding > 0.01 && (
+                      <DocRow
+                        label="Comprobante de pago"
+                        url={null}
+                        uploadHref={`/payments/${invoice.id}/upload`}
+                      />
+                    )}
+                    {invoice.condicionesPago === "PPD" && (
+                      <div className="pt-2 mt-1 border-t border-line">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="text-[12px] font-medium text-ink-2 uppercase tracking-wide">
+                            Complementos de Pago (CFDI)
+                          </div>
+                          {paymentComplements.length > 0 && (
+                            <span className="text-[11px] font-mono text-ink-3">
+                              {paymentComplements.length}
+                            </span>
+                          )}
+                        </div>
+                        {paymentComplements.length === 0 ? (
+                          <>
+                            <p className="text-[12px] text-ink-3 leading-snug mb-2">
+                              Falta Complemento de Pago para esta factura PPD. Sube el XML del CFDI tipo &ldquo;Pago&rdquo; (REP) para registrar el pago ante el SAT.
+                            </p>
+                            {canUploadComplement && (
+                              <DocRow
+                                label="Subir complemento"
+                                url={null}
+                                uploadHref={`/invoice/${invoice.id}/upload-doc?kind=comppago`}
+                              />
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            {paymentComplements.map((pc) => (
+                              <div
+                                key={pc.id}
+                                className="flex items-center justify-between gap-3 rounded-md border border-line bg-paper-2 px-3 py-2 mb-1.5"
+                              >
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <Icon name="file" size={13} className="text-ink-3 flex-shrink-0" />
+                                  <div className="min-w-0">
+                                    <p className="text-[12.5px] text-ink-2 truncate">
+                                      {pc.folio}
+                                    </p>
+                                    <p className="text-[10px] text-ink-3 font-mono">
+                                      {fmtDate(pc.fechaTimbrado)} · ${pc.montoTotal.toFixed(2)} {pc.moneda}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
               </div>
             </div>
           </div>
@@ -997,7 +1167,6 @@ export function ErrorBoundary() {
       ? error.message
       : "Error inesperado";
 
-  // Status-aware copy tailored to the invoice context.
   const titleByStatus: Record<number, string> = {
     401: "Tu sesión ya no es válida.",
     403: "No tienes permisos para ver esta factura.",

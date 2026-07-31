@@ -104,8 +104,8 @@ export function OrderItemsTable({ lines, onChange, currency }: OrderItemsTablePr
                   <Input
                     aria-label={`Cantidad línea ${idx + 1}`}
                     type="number"
-                    inputMode="decimal"
-                    step="0.01"
+                    inputMode="numeric"
+                    step="1"
                     min="0"
                     value={line.qty}
                     onChange={(e) => updateLine(idx, { qty: e.target.value })}

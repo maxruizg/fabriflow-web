@@ -20,6 +20,8 @@ export interface AuthorizeOrderDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: "approve" | "reject";
+  /** Called after successful authorization/rejection */
+  onSuccess?: () => void;
 }
 
 interface FetcherShape {
@@ -32,25 +34,35 @@ export function AuthorizeOrderDialog({
   open,
   onOpenChange,
   mode,
+  onSuccess,
 }: AuthorizeOrderDialogProps) {
   const fetcher = useFetcher<FetcherShape>();
   const [rejectionReason, setRejectionReason] = useState("");
+  const [hasCalledSuccess, setHasCalledSuccess] = useState(false);
 
+  // Reset state when dialog opens
   useEffect(() => {
     if (open) {
       setRejectionReason("");
+      setHasCalledSuccess(false);
     }
   }, [open]);
 
-  // Cerrar el diálogo cuando la autorización sea exitosa
+  // Cerrar el diálogo cuando la autorización sea exitosa y llamar onSuccess
   useEffect(() => {
-    if (fetcher.data?.ok) {
+    if (fetcher.data?.ok && !hasCalledSuccess) {
+      setHasCalledSuccess(true);
       onOpenChange(false);
+      onSuccess?.();
     }
-  }, [fetcher.data?.ok, onOpenChange]);
+  }, [fetcher.data?.ok, hasCalledSuccess, onOpenChange, onSuccess]);
 
   const submitting = fetcher.state !== "idle";
   const canSubmit = mode === "approve" || rejectionReason.trim().length > 0;
+
+  // Calcular total con IVA (order.amount es subtotal)
+  const ivaRate = order.ivaRate ?? 16;
+  const totalWithTax = Math.round(order.amount * (1 + ivaRate / 100) * 100) / 100;
 
   const handleSubmit = () => {
     fetcher.submit(
@@ -100,12 +112,12 @@ export function AuthorizeOrderDialog({
               <span className="font-medium text-ink">{order.vendor}</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-ink-3">Monto:</span>
+              <span className="text-ink-3">Monto total (con IVA):</span>
               <span className="font-semibold text-clay">
                 {new Intl.NumberFormat("es-MX", {
                   style: "currency",
                   currency: order.currency,
-                }).format(order.amount)}
+                }).format(totalWithTax)}
               </span>
             </div>
             <div className="flex justify-between text-sm">

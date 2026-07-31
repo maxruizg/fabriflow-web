@@ -154,6 +154,61 @@ export const registerSchema = baseRegisterSchema
     path: ["companyEmail"],
   });
 
+// ============================================================================
+// BUYER REGISTRATION SCHEMA
+// Para empresas compradoras que se registran en /register
+// ============================================================================
+export const buyerRegisterSchema = z.object({
+  // Información del usuario administrador
+  name: z
+    .string()
+    .min(2, "El nombre debe tener al menos 2 caracteres")
+    .max(100, "El nombre no puede exceder 100 caracteres"),
+
+  email: z
+    .string()
+    .email("Correo electrónico inválido")
+    .max(100, "El correo no puede exceder 100 caracteres"),
+
+  password: z
+    .string()
+    .min(8, "La contraseña debe tener al menos 8 caracteres")
+    .max(100, "La contraseña no puede exceder 100 caracteres"),
+
+  confirmPassword: z
+    .string()
+    .min(8, "La contraseña debe tener al menos 8 caracteres"),
+
+  // Información de la empresa
+  company: z.object({
+    name: z
+      .string()
+      .min(3, "El nombre de la empresa debe tener al menos 3 caracteres")
+      .max(100, "El nombre de la empresa no puede exceder 100 caracteres"),
+
+    rfc: z
+      .string()
+      .min(12, "El RFC debe tener al menos 12 caracteres")
+      .max(13, "El RFC no puede exceder 13 caracteres")
+      .regex(rfcRegex, "Formato de RFC inválido (ej: ABC123456XYZ)"),
+
+    email: z
+      .string()
+      .email("Correo electrónico de la empresa inválido")
+      .max(100, "El correo no puede exceder 100 caracteres"),
+
+    phone: z
+      .string()
+      .min(10, "El teléfono debe tener al menos 10 dígitos")
+      .regex(phoneRegex, "Formato de teléfono inválido"),
+  }),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Las contraseñas no coinciden",
+  path: ["confirmPassword"],
+});
+
+export type BuyerRegisterFormData = z.infer<typeof buyerRegisterSchema>;
+
 // Login schema - company no longer required (multi-company flow)
 export const loginSchema = z.object({
   email: z

@@ -70,7 +70,7 @@ function Summary({
   className?: string;
 }) {
   return (
-    <div className={cn("font-mono text-[11px] text-ink-3", className)}>
+    <div className={cn("text-[13px] text-ink-3 font-medium", className)}>
       {children}
     </div>
   );

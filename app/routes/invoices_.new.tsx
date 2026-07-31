@@ -42,7 +42,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // Solo vendors pueden cargar facturas (case-insensitive check)
   const isVendor = user.role?.toLowerCase() === "vendor" ||
                    user.role?.toLowerCase().includes("proveedor") ||
-                   user.permissions?.includes("invoices:create");
+                   user.permissions?.includes("invoices:create") ||
+                   user.permissions?.includes("invoices:upload");
   if (!isVendor && !user.permissions?.includes("*")) {
     return redirect("/invoices");
   }
@@ -65,11 +66,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     try {
       const ord = await fetchOrder(session.accessToken, user.company, orderId);
       const bareId = ord.id.startsWith("order:") ? ord.id.slice("order:".length) : ord.id;
+      // Calcular total con IVA (ord.amount es subtotal)
+      const ivaRate = ord.ivaRate ?? 16;
+      const totalWithTax = Math.round(ord.amount * (1 + ivaRate / 100) * 100) / 100;
       availableOrders.unshift({
         id: bareId,
         folio: ord.folio,
         date: ord.date,
-        amount: ord.amount,
+        amount: totalWithTax, // Total con IVA
         currency: ord.currency,
         itemsCount: ord.itemsCount ?? ord.items?.length ?? 0,
         hasInvoice: Boolean(ord.docState?.facInvoiceId),
@@ -340,14 +344,16 @@ function NewInvoiceSimplified() {
   const navigate = useNavigate();
 
   // Redirect to invoices list after successful upload (with a small delay to show preview)
+  const actionSucceeded = !!actionData && "success" in actionData && actionData.success;
+
   useEffect(() => {
-    if (actionData?.success) {
+    if (actionSucceeded) {
       const timeout = setTimeout(() => {
         navigate("/invoices?success=created");
       }, 3000);
       return () => clearTimeout(timeout);
     }
-  }, [actionData?.success, navigate]);
+  }, [actionSucceeded, navigate]);
 
   return (
     <AuthLayout>

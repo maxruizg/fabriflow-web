@@ -7,10 +7,10 @@ export type DocType = "OC" | "FAC" | "REM" | "NC" | "PAGO" | "REP";
 const SHORT: Record<DocType, string> = {
   OC: "OC",
   FAC: "FA",
-  REM: "RE",
+  REM: "REC",
   NC: "NC",
   PAGO: "PG",
-  REP: "CP",
+  REP: "COMPL",
 };
 const LONG: Record<DocType, string> = {
   OC: "Orden de compra",
@@ -50,13 +50,19 @@ export interface DocStripProps {
   /** Document types currently present on the entity. */
   docs: DocType[];
   className?: string;
+  /** Size variant for the doc strip */
+  size?: "normal" | "small";
 }
 
-const ALL_DOCS: DocType[] = ["OC", "FAC", "REM", "NC", "PAGO"];
+const ALL_DOCS: DocType[] = ["OC", "REM", "FAC", "NC", "PAGO", "REP"];
 
-export function DocStrip({ docs, className }: DocStripProps) {
+export function DocStrip({ docs, className, size = "normal" }: DocStripProps) {
   return (
-    <div className={cn("inline-flex items-center gap-1.5", className)}>
+    <div className={cn(
+      "inline-flex items-center",
+      size === "small" ? "gap-0.5 scale-75" : "gap-1.5",
+      className
+    )}>
       {ALL_DOCS.map((t) => (
         <DocChip key={t} type={t} absent={!docs.includes(t)} />
       ))}

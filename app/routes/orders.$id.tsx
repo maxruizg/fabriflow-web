@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from "@remix-run/cloudflare";
 import { json, redirect } from "@remix-run/cloudflare";
-import { Form, Link, useFetcher, useLoaderData, useNavigation, useSearchParams } from "@remix-run/react";
+import { Form, Link, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "@remix-run/react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 
 import { getFullSession, requireUser } from "~/lib/session.server";
@@ -178,6 +178,7 @@ export default function OrderDetailPage() {
   const [authorizeMode, setAuthorizeMode] = useState<"approve" | "reject">("approve");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const isDeleting =
     navigation.state !== "idle" && navigation.formData?.get("intent") === "delete";
 
@@ -204,6 +205,16 @@ export default function OrderDetailPage() {
   const canAuthorize =
     userPermissions.includes("orders:authorize") || userPermissions.includes("*");
   const needsAuthorization = order.status === "creada";
+
+  // Debug temporal
+  console.log("🔍 DEBUG Autorización:", {
+    status: order.status,
+    statusType: typeof order.status,
+    needsAuthorization,
+    canAuthorize,
+    userPermissions,
+    showButtons: needsAuthorization && canAuthorize,
+  });
 
   // Eliminar es soft-delete y queda en audit log: lo permitimos en cualquier
   // estado siempre que el usuario tenga el permiso. Útil para limpiar OCs
@@ -237,16 +248,16 @@ export default function OrderDetailPage() {
 
   return (
     <AuthLayout>
-      <div className="space-y-6 max-w-5xl">
-        <header className="flex flex-wrap items-start justify-between gap-3">
+      <div className="space-y-4 max-w-5xl">
+        <header className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <Button variant="ghost" size="sm" asChild className="mb-2">
+            <Button variant="ghost" size="sm" asChild className="mb-1">
               <Link to="/orders">
                 <Icon name="chevl" size={12} />
                 Volver a órdenes
               </Link>
             </Button>
-            <h1 className="ff-page-title">
+            <h1 className="text-[18px] font-semibold text-ink">
               Orden{" "}
               <em
                 title={order.folio}
@@ -255,7 +266,7 @@ export default function OrderDetailPage() {
                 {folioDisplay}
               </em>
             </h1>
-            <p className="ff-page-sub">
+            <p className="text-[12px] text-ink-3 mt-0.5">
               {order.date} · {(order.itemsCount ?? order.items?.length ?? 0)} línea
               {(order.items?.length ?? 0) === 1 ? "" : "s"} ·{" "}
               {moneyFmt(order.amount, order.currency)}
@@ -320,9 +331,12 @@ export default function OrderDetailPage() {
               if (!order.docState.ncUrl) docOptions.push({ label: "Nota de crédito", kind: "nc" });
               if (!order.docState.paymentReceiptUrl) docOptions.push({ label: "Comprobante de pago", kind: "pago" });
               // Sólo facturas PPD requieren CFDI Complemento de Pago. PUE nunca lo ve.
+              // No mostrar si ya está "Cerrado" o si ya hay complementos cargados.
               if (
                 order.paymentMethod === "PPD" &&
-                order.docState.facInvoiceId
+                order.docState.facInvoiceId &&
+                order.status !== "cerrado" &&
+                paymentComplements.length === 0
               ) {
                 docOptions.push({ label: "Complemento de Pago (CFDI)", kind: "comppago" });
               }
@@ -409,10 +423,10 @@ export default function OrderDetailPage() {
           </div>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="lg:col-span-2 overflow-hidden">
-            <CardHeader className="flex flex-row items-center justify-between gap-2">
-              <CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+              <CardTitle className="text-[14px]">
                 Vista previa <em className="not-italic text-clay">del PDF</em>
               </CardTitle>
               <Button variant="ghost" size="sm" asChild>
@@ -439,8 +453,8 @@ export default function OrderDetailPage() {
           </Card>
 
           <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-[14px]">
                 Líneas <em className="not-italic text-clay">de la orden</em>
               </CardTitle>
             </CardHeader>
@@ -544,10 +558,10 @@ export default function OrderDetailPage() {
             </CardContent>
           </Card>
 
-          <div className="space-y-6">
+          <div className="space-y-4">
             <Card>
-              <CardHeader>
-                <CardTitle>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-[14px]">
                   Proveedor
                 </CardTitle>
               </CardHeader>
@@ -580,8 +594,8 @@ export default function OrderDetailPage() {
             </Card>
 
             <Card>
-              <CardHeader>
-                <CardTitle>Documentos</CardTitle>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-[14px]">Documentos</CardTitle>
               </CardHeader>
               <CardContent className="text-[13px] space-y-2">
                 <DocRow label="OC (PDF)" url={order.docState.ocUrl} />
@@ -729,6 +743,12 @@ export default function OrderDetailPage() {
           open={authorizeOpen}
           onOpenChange={setAuthorizeOpen}
           mode={authorizeMode}
+          onSuccess={() => {
+            // Cerrar el modal
+            setAuthorizeOpen(false);
+            // Revalidar los datos de la orden para actualizar el estado
+            revalidator.revalidate();
+          }}
         />
 
         <Dialog open={deleteOpen} onOpenChange={(o) => !isDeleting && setDeleteOpen(o)}>

@@ -116,7 +116,14 @@ export default function Login() {
   const navigation = useNavigation();
   const [showPassword, setShowPassword] = useState(false);
   const [loginType, setLoginType] = useState<"email" | "rfc">("email");
+  const [showVendorMessage, setShowVendorMessage] = useState(false);
   const isSubmitting = navigation.state === "submitting";
+
+  // Ocultar mensaje cuando cambia el tipo de login
+  const handleLoginTypeChange = (type: "email" | "rfc") => {
+    setLoginType(type);
+    setShowVendorMessage(false);
+  };
 
   return (
     <div className="min-h-screen grid lg:grid-cols-[1.1fr_1fr] bg-background">
@@ -178,14 +185,14 @@ export default function Login() {
           >
             <RoleTab
               active={loginType === "email"}
-              onClick={() => setLoginType("email")}
+              onClick={() => handleLoginTypeChange("email")}
               icon="vendors"
               label="Empresa"
               hint="Email"
             />
             <RoleTab
               active={loginType === "rfc"}
-              onClick={() => setLoginType("rfc")}
+              onClick={() => handleLoginTypeChange("rfc")}
               icon="orders"
               label="Proveedor"
               hint="RFC"
@@ -291,15 +298,49 @@ export default function Login() {
             </Button>
           </Form>
 
+          {/* Link de registro - siempre visible */}
           <p className="mt-7 text-center text-[13px] text-ink-3">
             ¿No tienes una cuenta?{" "}
-            <Link
-              to="/register"
-              className="font-medium text-clay hover:underline"
-            >
-              Regístrate aquí
-            </Link>
+            {loginType === "email" ? (
+              <Link
+                to="/register"
+                className="font-medium text-clay hover:underline"
+              >
+                Regístrate aquí
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowVendorMessage(true)}
+                className="font-medium text-clay hover:underline"
+              >
+                Regístrate aquí
+              </button>
+            )}
           </p>
+
+          {/* Mensaje que aparece solo al hacer click cuando es proveedor */}
+          {showVendorMessage && loginType === "rfc" && (
+            <div className="mt-4 flex gap-2.5 rounded-lg border border-clay/20 bg-clay-soft p-3.5">
+              <Icon
+                name="vendors"
+                size={14}
+                className="mt-0.5 flex-shrink-0 text-clay-deep"
+              />
+              <div className="flex-1">
+                <p className="text-[11px] text-clay-deep leading-relaxed">
+                  <strong>Los proveedores se registran por invitación.</strong> Tu empresa compradora debe enviarte un enlace de invitación. Si aún no lo has recibido, contacta con tu empresa compradora.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowVendorMessage(false)}
+                  className="mt-2 text-[10px] text-clay-deep underline"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          )}
 
           <p className="mt-12 text-center text-[11px] font-mono text-ink-4">
             © 2026 FabriFlow · Todos los derechos reservados

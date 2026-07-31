@@ -139,7 +139,13 @@ export function XmlPreview({ url, className }: XmlPreviewProps) {
 
     fetch(url)
       .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          // Si es un error 400 o 401, probablemente el signed URL expiró
+          if (res.status === 400 || res.status === 401) {
+            throw new Error("El enlace del documento ha expirado. Por favor recarga la página.");
+          }
+          throw new Error(`HTTP ${res.status}`);
+        }
         return res.text();
       })
       .then((raw) => {
@@ -211,12 +217,24 @@ export function XmlPreview({ url, className }: XmlPreviewProps) {
                 No se pudo cargar el XML
               </p>
               <p className="text-[11px] mt-1">{state.message}</p>
-              <Button variant="outline" size="sm" className="mt-3" asChild>
-                <a href={url} target="_blank" rel="noopener noreferrer" download>
-                  <Download className="h-3 w-3" />
-                  Descargar
-                </a>
-              </Button>
+              <div className="flex gap-2 mt-3 justify-center">
+                {state.message.includes("expirado") && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => window.location.reload()}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Recargar página
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" asChild>
+                  <a href={url} target="_blank" rel="noopener noreferrer" download>
+                    <Download className="h-3 w-3" />
+                    Descargar
+                  </a>
+                </Button>
+              </div>
             </div>
           </div>
         )}
